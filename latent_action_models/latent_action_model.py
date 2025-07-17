@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from   torch import Tensor
 import torch.nn.functional as F
 
 from latent_action_models.st_transformer import S_Transformer, ST_Transformer
@@ -24,19 +25,28 @@ class LatentActionModel(nn.Module):
 
         self.action_prompt = nn.Parameter(torch.empty(1,1,1, self.patch_token_dim))
         nn.init.uniform_(self.action_prompt, a=-1, b=1)
-
+    
         self.encoder        = ST_Transformer(in_dim=self.patch_token_dim,
                                              model_dim=self.model_dim,
                                              out_dim=self.model_dim,
                                              num_blocks=num_enc_blocks,
                                              num_heads=num_heads, dropout=dropout)
+        
+        # -- vae
         self.vae_proj       = nn.Linear(model_dim,              self.vae_dim * 2)
         self.patch_proj     = nn.Linear(self.patch_token_dim,   model_dim)
         self.action_proj    = nn.Linear(self.vae_dim,           model_dim)
-
+        
         self.decoder        = S_Transformer(in_dim=self.model_dim,
                                             model_dim=model_dim,
                                             out_dim=self.patch_token_dim,
                                             num_blocks=num_dec_blocks,
                                             num_heads=num_heads,
                                             dropout=dropout)
+    
+    def encode_to_latent_actions(self, video_bnchw: Tensor)     -> Tensor:
+        pass
+
+    def decode_to_frame(self, video_bnchw: Tensor, actions_bnd) -> Tensor:
+        pass
+
