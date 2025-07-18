@@ -65,10 +65,14 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     data_config:     DataConfig      = field(default_factory=DataConfig)
 
     @classmethod
-    def from_yaml(cls, yaml_path: str | pathlib.Path) -> "LatentActionModelTrainingConfig":
+    def from_yaml(cls, yaml_path: str | pathlib.Path) -> LatentActionModelTrainingConfig:
         with open(yaml_path, "r") as f:
             raw: dict[str, Any] = yaml.safe_load(f)
+        
+        return cls.from_dict(raw)
 
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> LatentActionModelTrainingConfig:
         data_cfg = DataConfig.from_dict(raw.pop("data", {}))
 
         # filter unknown keys & tuple-ify list fields where necessary

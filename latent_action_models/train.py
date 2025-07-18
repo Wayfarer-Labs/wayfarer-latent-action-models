@@ -81,6 +81,11 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.scheduler.load_state_dict(ckpt["scheduler"])
 
         self.global_step = ckpt.get("step", 0)
+        self.cfg         = self.cfg.from_dict(ckpt['cfg'])
+
+        torch       .set_rng_state    (ckpt['torch_rng'])
+        torch.cuda  .set_rng_state_all(ckpt['cuda_rng']) if ckpt['cuda_rng'] is not None else ()
+
         print(f"[rank {self.rank}] resumed from {path} @ step {self.global_step}")
 
 
