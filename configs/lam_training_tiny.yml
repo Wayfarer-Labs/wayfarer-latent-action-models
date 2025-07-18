@@ -1,5 +1,5 @@
 ckpt_dir: checkpoints            # where checkpoints go
-resume_checkpoint: null          # path to *.pt to resume from (or null)
+resume_checkpoint: /Users/samib/wayfarer-latent-action-models/checkpoints/lam_s0.pt          # path to *.pt to resume from (or null)
 
 # -- optimizer
 lr: 2.5e-5                       # AdamW learning-rate

@@ -46,7 +46,7 @@ class BaseTrainer(nn.Module):
                 output_device=self.device.index,
                 find_unused_parameters=False)
         
-        if self.should_load:       self.load_checkpoint()
+        if self.should_load: self.load_checkpoint(self.cfg.resume_checkpoint)
 
     @abstractmethod
     def load_checkpoint(self, path: os.PathLike) -> None: raise NotImplementedError
