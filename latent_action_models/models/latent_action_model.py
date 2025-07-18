@@ -21,7 +21,7 @@ class LatentActionModelOutput(TypedDict):
     video_patches_bnpd:         Tensor
     action_bn1d:                Tensor
     mean_bn1d:                  Tensor
-    var_bn1d:                   Tensor
+    logvar_bn1d:                Tensor
     reconstructed_video_bnchw:  Tensor
 
 
@@ -96,7 +96,7 @@ class LatentActionModel(nn.Module):
         
         return ActionEncodingInfo(  action_bn1d  = eo.rearrange(action_bv,  '(b n) d -> b n 1 d', b=B),
                                     mean_bn1d    = eo.rearrange(mean_bv,    '(b n) d -> b n 1 d', b=B),
-                                    var_bn1d     = eo.rearrange(logvar_bv,  '(b n) d -> b n 1 d', b=B))
+                                    logvar_bn1d  = eo.rearrange(logvar_bv,  '(b n) d -> b n 1 d', b=B))
 
     def decode_to_frame(self,
                         video_patches_bnpd: Tensor,

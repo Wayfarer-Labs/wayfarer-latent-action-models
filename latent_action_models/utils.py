@@ -1,3 +1,4 @@
+import  os
 import  torch
 import  einops as eo
 from    torch import Tensor
@@ -23,3 +24,25 @@ def unpatchify(patches_bnpd: Tensor, size: int, h_out: int, w_out: int) -> Tenso
                             hp=size, wp=size, hn=hn)
     return video_bnhwc[:,:,:h_out, :w_out]
  
+
+def init_distributed() -> tuple[int, int, torch.device]:
+    distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
+
+    if distributed and not torch.distributed.is_initialized():
+        backend = "nccl" if torch.cuda.is_available() else "gloo"
+        torch.distributed.init_process_group(
+            backend=backend,
+            timeout=torch.timedelta(minutes=30),
+        )
+
+    rank       = torch.distributed.get_rank()       if distributed else 0
+    world_size = torch.distributed.get_world_size() if distributed else 1
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+    else:
+        device = torch.device("cpu")
+
+    return rank, world_size, device

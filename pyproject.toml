@@ -6,3 +6,6 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "latent_action_models"
 version = "0.0.1"
+
+[tool.setuptools]
+packages = ["latent_action_models", "configs"]
