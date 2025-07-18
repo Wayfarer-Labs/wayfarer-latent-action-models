@@ -15,12 +15,12 @@ class PositionalEncoding(nn.Module):
         pe          = torch.zeros(max_len, model_dim)
         position    = torch.arange(0, max_len)      .float().unsqueeze(1)
         exponent    = torch.arange(0, model_dim, 2) .float() * -(math.log(10000.0) / model_dim)
-        pe[:, 0::2] = torch.sin(position).div(torch.exp(exponent))
-        pe[:, 1::2] = torch.cos(position).div(torch.exp(exponent))
+        pe[:, 0::2] = torch.sin(position).mul(torch.exp(exponent))
+        pe[:, 1::2] = torch.cos(position).mul(torch.exp(exponent))
         self.pos_enc = pe
 
     def forward(self, x: Tensor) -> Tensor:
-        return x + self.pos_enc[:x.shape[2]].cuda()
+        return x + self.pos_enc[:x.shape[2]]#.cuda()
 
 class SelfAttention(nn.Module):
     def __init__(
@@ -33,7 +33,6 @@ class SelfAttention(nn.Module):
         proj_bias:  bool    = True,
         qk_norm:    bool    = True,
         attn_drop:  float   = 0.0,
-        use_mup:    bool    = True,
         use_rotary: bool    = False,
     ) -> None:
         super().__init__()
@@ -43,7 +42,7 @@ class SelfAttention(nn.Module):
 
         # Scaling by 8 to be equal when head_dim=64
         self.causal     = causal
-        self.scale      = 8/self.head_dim if use_mup else self.head_dim**-0.5
+        self.scale      = math.sqrt(self.head_dim)
         self.qkv        = nn.Linear(d_model, d_model * 3, bias=qkv_bias)
         self.attn_drop  = nn.Dropout(attn_drop)
         self.proj       = nn.Sequential(
@@ -53,8 +52,8 @@ class SelfAttention(nn.Module):
 
         # qk normalization https://arxiv.org/pdf/2302.05442
         # Note that LN is done in fp32, so they have to be
-        self.qk_norm    = self.qk_norm      and nn.LayerNorm(self.head_dim, eps=1e-05)
-        self.rotary     = self.use_rotary   and RotaryEmbedding(dim=self.head_dim)
+        self.qk_norm    = qk_norm      and nn.LayerNorm(self.head_dim, eps=1e-05)
+        self.rotary     = use_rotary   and RotaryEmbedding(dim=self.head_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, N, C = x.shape
@@ -136,7 +135,7 @@ class ST_Block(nn.Module):
         x = rearrange(xs, '(B T) S C -> B T S C', B=B)
         # temporal (bidirectional)
         xt = rearrange(x, 'B T S C -> (B S) T C')
-        xt = xt + self.t_attn(self.norm_t(xt), causal=False)
+        xt = xt + self.t_attn(self.norm_t(xt))
         x = rearrange(xt, '(B S) T C -> B T S C', S=S)
         # MLP
         x = x + self.mlp(self.norm_m(x))
@@ -146,11 +145,11 @@ class ST_Block(nn.Module):
 class S_Block(nn.Module):
     def __init__(
         self,
-        d_model: int,
-        num_heads: int,
-        attn_drop: float = 0.0,
-        mlp_ratio: float = 4.0,
-        mlp_drop: float = 0.0,
+        d_model:    int,
+        num_heads:  int,
+        attn_drop:  float = 0.0,
+        mlp_ratio:  float = 4.0,
+        mlp_drop:   float = 0.0,
     ) -> None:
         super().__init__()
         self.norm_s = nn.LayerNorm(d_model)
@@ -159,15 +158,15 @@ class S_Block(nn.Module):
         self.norm_m = nn.LayerNorm(d_model)
         self.mlp    = MLP(d_model, ratio=mlp_ratio, drop=mlp_drop)
 
-    def forward(self, x: Tensor) -> Tensor:  # x: [B,T,S,C]
-        B, T, S, C = x.shape
+    def forward(self, in_bnsc: Tensor) -> Tensor:
+        B, N, S, C = in_bnsc.shape
         # spatial
-        xs = rearrange(x, 'B T S C -> (B T) S C')
-        xs = xs + self.s_attn(self.norm_s(xs))
-        x = rearrange(xs, '(B T) S C -> B T S C', B=B)
+        x_bsc   = rearrange(in_bnsc, 'B N S C -> (B N) S C')
+        x_bsc   = x_bsc + self.s_attn(self.norm_s(x_bsc))
+        x_bnsc  = rearrange(x_bsc, '(B N) S C -> B N S C', B=B)
         # MLP
-        x = x + self.mlp(self.norm_m(x))
-        return x
+        x_bnsc += self.mlp(self.norm_m(x_bnsc))
+        return x_bnsc
 
 
 class Block_Transformer(nn.Module):
@@ -194,10 +193,10 @@ class Block_Transformer(nn.Module):
         ])
         self.out_proj   = nn.Linear(model_dim, out_dim)
 
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.in_proj  (x)
+    def forward(self, x_bnpd: Tensor) -> Tensor:
+        x = self.in_proj  (x_bnpd)
         x = self.pos_embed(x)
-        x = toolz.pipe(x, *self.blocks)
+        x = toolz.pipe    (x, *self.blocks)
         x = self.out_proj (x)
         return x
 

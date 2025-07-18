@@ -1,0 +1,8 @@
+# pyproject.toml  (repo root)
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latent_action_models"
+version = "0.0.1"
