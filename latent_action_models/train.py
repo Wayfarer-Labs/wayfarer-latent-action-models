@@ -14,7 +14,7 @@ from latent_action_models.models.latent_action_model import LatentActionModel, L
 from latent_action_models.configs                    import LatentActionModelTrainingConfig
 from latent_action_models.base_trainer               import BaseTrainer
 
-CKPT_DIR = pathlib.Path('checkpoints/')
+CKPT_DIR = pathlib.Path('checkpoints/') # global cause im very cool and special
 
 
 class LogStats(TypedDict):
