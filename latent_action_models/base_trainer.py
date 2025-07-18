@@ -1,4 +1,5 @@
-import pathlib, torch, time
+import pathlib, torch, time, os, abc
+from abc import abstractmethod
 from contextlib        import nullcontext
 from torch.optim       import AdamW
 from torch.nn          import utils
@@ -7,6 +8,7 @@ from torch             import nn, Tensor
 from latent_action_models.configs   import BaseTrainerConfig
 from latent_action_models.utils     import init_distributed
 
+CKPT_DIR = 'checkpoints/' # global cause im very cool and special
 
 class BaseTrainer(nn.Module):
     def __init__(self, model: nn.Module, cfg: BaseTrainerConfig,
@@ -15,13 +17,14 @@ class BaseTrainer(nn.Module):
         rank, world_size, device = init_distributed()
         self.rank, self.world_size, self.device = rank, world_size, device
         
-        self.model        = model.to(device)
-        self.cfg          = cfg
-        self.device       = torch.device(device)
-        self.global_step  = 0
+        self.model          = model.to(device)
+        self.cfg            = cfg
+        self.device         = torch.device(device)
+        self.global_step    = 0
+        self.batch_size     = cfg.data_config.batch_size
 
         # -- dirs
-        self.ckpt_dir = pathlib.Path(cfg.ckpt_dir)
+        self.ckpt_dir       = pathlib.Path(cfg.ckpt_dir or CKPT_DIR)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
 
         # -- optimisation
@@ -31,11 +34,26 @@ class BaseTrainer(nn.Module):
                                 betas=cfg.betas)
 
         # -- TODO choose a real schedule lol
-        self.scheduler      = torch.optim.lr_scheduler.LambdaLR(self.optimizer,
-                                                            cfg.lr_lambda)
+        self.scheduler      = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, cfg.max_steps)
         self.max_grad_norm  = cfg.max_grad_norm
         self.use_amp        = cfg.amp
         self.scaler         = torch.amp.GradScaler(self.device.type)
+
+        if self.world_size > 1:
+            self.model = nn.parallel.DistributedDataParallel(
+                self.model,
+                device_ids=[self.device.index],
+                output_device=self.device.index,
+                find_unused_parameters=False)
+        
+        if self.should_load:       self.load_checkpoint()
+
+    @abstractmethod
+    def load_checkpoint(self, path: os.PathLike) -> None: raise NotImplementedError
+
+    @abstractmethod
+    def save_checkpoint(self, path: os.PathLike) -> None: raise NotImplementedError
+
 
     def optim_step(self, loss: Tensor) -> float:
         self.optimizer.zero_grad(set_to_none=True)
@@ -84,3 +102,6 @@ class BaseTrainer(nn.Module):
 
     def amp_ctx(self):
         return torch.amp.autocast(self.device.type) if self.use_amp else nullcontext()
+
+    @abstractmethod
+    def train(self) -> None: raise NotImplementedError

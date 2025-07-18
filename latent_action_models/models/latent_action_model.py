@@ -5,7 +5,7 @@ from    torch       import Tensor
 import  torch.nn.functional as F
 from    typing      import TypedDict
 
-from    latent_action_models.st_transformer import S_Transformer, ST_Transformer
+from    latent_action_models.models.st_transformer import S_Transformer, ST_Transformer
 import  latent_action_models.utils as utils
 
 
@@ -65,6 +65,9 @@ class LatentActionModel(nn.Module):
                                             num_blocks=num_dec_blocks,
                                             num_heads=num_heads,
                                             dropout=dropout)
+                                            
+        print(f'[LatentActionModel] ✅ model initialized with num_params={sum(p.numel() for p in self.parameters()):,}')
+    
     
     def _patchify(self, video_bnchw: Tensor) -> Tensor:
         return utils.patchify(video_bnchw, size=self.patch_size)
@@ -109,7 +112,7 @@ class LatentActionModel(nn.Module):
 
         video_reconstruction_bnpd   = self.decoder(prev_video_proj_patches_bnpc + action_proj_patches_bn1c)
         video_reconstruction_bnpd   = F.sigmoid(video_reconstruction_bnpd)
-        video_reconstruction_bnchw  = self._unpatchify(video_reconstruction_bnpd,)
+        video_reconstruction_bnchw  = self._unpatchify(video_reconstruction_bnpd)
 
         return ActionDecodingInfo(reconstructed_video_bnchw = video_reconstruction_bnchw)
 

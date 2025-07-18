@@ -14,7 +14,6 @@ from latent_action_models.models.latent_action_model import LatentActionModel, L
 from latent_action_models.configs                    import LatentActionModelTrainingConfig
 from latent_action_models.base_trainer               import BaseTrainer
 
-CKPT_DIR = pathlib.Path('checkpoints/') # global cause im very cool and special
 
 
 class LogStats(TypedDict):
@@ -47,28 +46,11 @@ def kl_divergence(mean, logvar) -> Tensor:
 
 class Trainer_LatentActionModel(BaseTrainer):
     def __init__(self, config: LatentActionModelTrainingConfig) -> None:
-        super().__init__(LatentActionModelTrainingConfig)
-        self.cfg                 = config
-        self.global_step         = 0
-        self.ckpt_dir            = CKPT_DIR
-        self._wandb_run          = None
-        # -- data
-        self.batch_size         = config.data_config.batch_size
-        # -- optim
-        self.optimizer: Optimizer = None
-        self.scheduler            = None
-        self.max_grad_norm        = None
-        self.beta                 = 0.
-        self.latent_action_model  = create_latent_action_model(config)
-
-        if self.world_size > 1:
-            self.latent_action_model = nn.parallel.DistributedDataParallel(
-                self.latent_action_model,
-                device_ids=[self.device.index],
-                output_device=self.device.index,
-                find_unused_parameters=False)
-
-        if self.should_load:       self.load_checkpoint()
+        latent_action_model = create_latent_action_model(config)
+        super(Trainer_LatentActionModel, self).__init__(latent_action_model, config, device="cpu")
+        self.beta           = 0.
+        self._wandb_run     = None
+        self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
 
     @property
     def save_path(self) -> str: return f'lam_s{self.global_step}.pt'
@@ -115,31 +97,32 @@ class Trainer_LatentActionModel(BaseTrainer):
 
     def train_step(self, video_bnchw: Tensor) -> LogStats:
         with self.amp_ctx():
+            torch.autograd.set_detect_anomaly(True)
+
             future_frame_video_bnchw             = video_bnchw[:, 1:]
-            lam_outputs: LatentActionModelOutput = self.latent_action_model(video_bnchw)
+            lam_outputs: LatentActionModelOutput = self.model(video_bnchw)
             reconstructed_frames_bnchw           = lam_outputs['reconstructed_video_bnchw']
 
             mse_loss    = F.mse_loss(reconstructed_frames_bnchw, future_frame_video_bnchw)
             kl_loss     = kl_divergence(lam_outputs['mean_bn1d'], lam_outputs['logvar_bn1d'])
             total_loss  = mse_loss + (self.beta * kl_loss)
-
             grad_norm   = self.optim_step(total_loss)
 
-            return LogStats( loss           = total_loss  .item(),
-                            kl_loss         = kl_loss      .item(), 
-                            recon_loss      = mse_loss     .item(),
-                            mu              = lam_outputs['mean_bn1d'],
-                            logvar          = lam_outputs['logvar_bn1d'],
-                            grad_norm       = grad_norm,
-                            learning_rate   = self.optimizer.param_groups[0]["lr"],
-                            weight_decay    = self.optimizer.param_groups[0]["weight_decay"])
+            return LogStats( loss           = total_loss    .item(),
+                             kl_loss         = kl_loss      .item(), 
+                             recon_loss      = mse_loss     .item(),
+                             mu              = lam_outputs['mean_bn1d'],
+                             logvar          = lam_outputs['logvar_bn1d'],
+                             grad_norm       = grad_norm,
+                             learning_rate   = self.optimizer.param_groups[0]["lr"],
+                             weight_decay    = self.optimizer.param_groups[0]["weight_decay"])
 
 
     def log_step(self, stats: LogStats) -> None:
         # -- lazy init wandb
         if self._wandb_run is None:
-            run_name        = getattr(self.cfg, "run_name", f"LAM_{time.time():.0f}")
-            self._wandb_run = wandb.init(project=getattr(self.cfg, "wandb_project", "latent-action-models"),
+            run_name        = self.cfg.run_name or f"LAM_{time.time():.0f}"
+            self._wandb_run = wandb.init(project=self.cfg.wandb_project,
                                          name=run_name, config=dataclasses.asdict(self.cfg))
 
         mu_bn1d     = stats["mu"]
@@ -170,6 +153,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         if "iter_sec" in stats: wandb_dict["perf/iter_sec"] = stats["iter_sec"]
 
         wandb.log(wandb_dict, step=self.global_step)
+        print(f"[rank {self.rank}] {wandb_dict}")
 
 
     def train(self)   -> None:
@@ -184,3 +168,8 @@ class Trainer_LatentActionModel(BaseTrainer):
 
         self.save_checkpoint(self.ckpt_dir / self.save_path)
         return
+
+if __name__ == "__main__":
+    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_training_tiny.yml")
+    trainer = Trainer_LatentActionModel(config)
+    trainer.train()

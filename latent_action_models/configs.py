@@ -3,7 +3,7 @@ import  yaml
 import  pathlib
 import  dataclasses
 from    dataclasses import dataclass, field, asdict
-from    typing      import Callable, Optional, Any
+from    typing      import Optional, Any
 
 
 @dataclass
@@ -21,32 +21,40 @@ class DataConfig:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "DataConfig":
-        recognised = {k: v for k, v in d.items() if k in cls.__annotations__}
+        recognised     = {k: v for k, v in d.items() if k     in cls.__annotations__}
+        not_recognised = {k: v for k, v in d.items() if k not in cls.__annotations__}
+        
+        if not_recognised:
+            print(f"[DataConfig.from_dict] ‼ unknown keys ignored:")
+            for k, v in not_recognised.items(): print(f"  - {k}: {v}")
+
+        if not_recognised == {}: print(f"[DataConfig.from_dict] ✅ all keys recognised")
+        if not_recognised != {}: print(f"[DataConfig.from_dict] ❌ some keys not recognised")
+        
         return cls(**recognised)
 
 
 @dataclass
 class BaseTrainerConfig:
+    data_config:     DataConfig             = field(default_factory=DataConfig)
+
     # -- checkpointing
-    ckpt_dir:         str                 = "checkpoints"
-    resume_checkpoint:Optional[str]       = None
+    ckpt_dir:         str                   = "checkpoints"
+    resume_checkpoint:Optional[str]         = None
+    run_name:         Optional[str]         = None
+    wandb_project:    str                   = "latent-action-models"
 
     # -- optimisation
-    lr:              float                = 1e-4
-    weight_decay:    float                = 0.0
-    betas:           tuple[float, float]  = (0.9, 0.999)
-    amp:             bool                 = False
-    max_grad_norm:   Optional[float]      = None
+    lr:              float                  = 1e-4
+    weight_decay:    float                  = 0.0
+    betas:           tuple[float, float]    = (0.9, 0.999)
+    amp:             bool                   = False
+    max_grad_norm:   Optional[float]        = None
 
     # -- loop control
-    max_steps:       int                  = 100_000
-    log_every:       int                  = 100
-    ckpt_every:      int                  = 5_000
-
-    # -- LR schedule (LambdaLR) TODO Fix this to be more flexible
-    lr_lambda: Callable[[int], float]     = field(
-        default_factory=lambda: (lambda step: 1.0)
-    )
+    max_steps:       int                    = 100_000
+    log_every:       int                    = 100
+    ckpt_every:      int                    = 5_000
 
 
 @dataclass
@@ -62,13 +70,10 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     dropout:         float           = 0.0
 
     beta:            float           = 0.0    # KL weight
-    data_config:     DataConfig      = field(default_factory=DataConfig)
 
     @classmethod
     def from_yaml(cls, yaml_path: str | pathlib.Path) -> LatentActionModelTrainingConfig:
-        with open(yaml_path, "r") as f:
-            raw: dict[str, Any] = yaml.safe_load(f)
-        
+        with open(yaml_path, "r") as f: raw: dict[str, Any] = yaml.safe_load(f)
         return cls.from_dict(raw)
 
     @classmethod
@@ -76,16 +81,14 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
         data_cfg = DataConfig.from_dict(raw.pop("data", {}))
 
         # filter unknown keys & tuple-ify list fields where necessary
-        field_names = {f.name for f in dataclasses.fields(cls)}
-        init_kw: dict[str, Any] = {"data": data_cfg}
+        field_names             = {f.name for f in dataclasses.fields(cls)}
+        init_kw: dict[str, Any] = {"data_config": data_cfg}
+        
         for k, v in raw.items():
             if k not in field_names:
-                print(f"[from_yaml] ‼ unknown key '{k}' ignored")
+                print(f"[LatentActionModelTrainingConfig.from_dict] ‼ unknown key '{k}' ignored")
                 continue
-            if k == "video_dims" and isinstance(v, list):
-                v = tuple(v)
-            if k == "betas" and isinstance(v, list):
-                v = tuple(v)
+            if isinstance(v, list): v = tuple(v)
             init_kw[k] = v
 
         return cls(**init_kw)

@@ -20,7 +20,7 @@ def unpatchify(patches_bnpd: Tensor, size: int, h_out: int, w_out: int) -> Tenso
     h_pad       = -h_out % size
     hn          = (h_out + h_pad) // size
     video_bnhwc = eo.rearrange(patches_bnpd,
-                            "b t (hn wn) (hp wp c) -> b t (hn hp) (wn wp) c",
+                            "b t (hn wn) (hp wp c) -> b t c (hn hp) (wn wp)",
                             hp=size, wp=size, hn=hn)
     return video_bnhwc[:,:,:h_out, :w_out]
  

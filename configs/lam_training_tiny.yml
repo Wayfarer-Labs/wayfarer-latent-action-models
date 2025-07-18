@@ -10,20 +10,20 @@ max_grad_norm: 0.3               # gradient-clip value
 
 # -- training loop
 max_steps: 1000000
-log_every: 1000                  # log interval
-ckpt_every: 5000                 # save interval
+log_every: 1                  # log interval
+ckpt_every: 1000                 # save interval
 
 # -- model
 video_dims: [256, 256]           # H, W
 in_dim: 3                        # image_channels
-model_dim: 1024                  # lam_model_dim
+model_dim: 64                  # lam_model_dim
 vae_dim: 32                      # lam_latent_dim
 patch_size: 16                   # lam_patch_size
-num_enc_blocks: 16               # lam_enc_blocks
-num_dec_blocks: 16               # lam_dec_blocks
-num_heads: 16                    # lam_num_heads
+num_enc_blocks: 4               # lam_enc_blocks
+num_dec_blocks: 4               # lam_dec_blocks
+num_heads: 4                    # lam_num_heads
 dropout: 0.0
-beta: 0.0002                     # KL weight
+beta: 0.2                     # KL weight
 
 # -- dataset
 data:

@@ -10,3 +10,6 @@ __pycache__/
 *.pyzwz
 
 *.egg*
+
+wandb/
+checkpoints/*

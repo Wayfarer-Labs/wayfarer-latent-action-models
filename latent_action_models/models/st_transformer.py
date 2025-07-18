@@ -4,7 +4,9 @@ import  torch
 import  torch.nn as nn
 from    einops  import rearrange
 from    torch   import Tensor
-from    latent_action_models.rotary import RotaryEmbedding
+
+from    latent_action_models.models.rotary import RotaryEmbedding
+
 
 class PositionalEncoding(nn.Module):
     def __init__(self,
@@ -165,7 +167,7 @@ class S_Block(nn.Module):
         x_bsc   = x_bsc + self.s_attn(self.norm_s(x_bsc))
         x_bnsc  = rearrange(x_bsc, '(B N) S C -> B N S C', B=B)
         # MLP
-        x_bnsc += self.mlp(self.norm_m(x_bnsc))
+        x_bnsc  = x_bnsc + self.mlp(self.norm_m(x_bnsc))
         return x_bnsc
 
 
