@@ -9,7 +9,6 @@ amp: true                        # mixed-precision (16-mixed)
 max_grad_norm: 0.3               # gradient-clip value
 
 # -- training loop
-batch_size: 64
 max_steps: 1000000
 log_every: 1000                  # log interval
 ckpt_every: 5000                 # save interval
@@ -28,7 +27,7 @@ beta: 0.0002                     # KL weight
 
 # -- dataset
 data:
-  batch_size: 60                 # keep in sync with trainer batch_size
+  batch_size: 64                 # keep in sync with trainer batch_size
   data_root: ../data
   env_source: game
   padding: repeat

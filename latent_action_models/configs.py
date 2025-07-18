@@ -19,6 +19,11 @@ class DataConfig:
     samples_per_epoch:   int      = 1_000_000
     sampling_strategy:   str      = "pi"
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "DataConfig":
+        recognised = {k: v for k, v in d.items() if k in cls.__annotations__}
+        return cls(**recognised)
+
 
 @dataclass
 class BaseTrainerConfig:
@@ -34,7 +39,6 @@ class BaseTrainerConfig:
     max_grad_norm:   Optional[float]      = None
 
     # -- loop control
-    batch_size:      int                  = 8
     max_steps:       int                  = 100_000
     log_every:       int                  = 100
     ckpt_every:      int                  = 5_000
@@ -58,37 +62,29 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     dropout:         float           = 0.0
 
     beta:            float           = 0.0    # KL weight
+    data_config:     DataConfig      = field(default_factory=DataConfig)
+
     @classmethod
     def from_yaml(cls, yaml_path: str | pathlib.Path) -> "LatentActionModelTrainingConfig":
         with open(yaml_path, "r") as f:
             raw: dict[str, Any] = yaml.safe_load(f)
 
-        # -- build nested DataConfig
-        data_dict = raw.pop("data", {})
-        data_cfg  = DataConfig(**{
-            k: v for k, v in data_dict.items()
-            if k in DataConfig.__annotations__
-        })
+        data_cfg = DataConfig.from_dict(raw.pop("data", {}))
 
+        # filter unknown keys & tuple-ify list fields where necessary
         field_names = {f.name for f in dataclasses.fields(cls)}
-        init_kwargs = {"data": data_cfg}
-
+        init_kw: dict[str, Any] = {"data": data_cfg}
         for k, v in raw.items():
             if k not in field_names:
-                print(f"[from_yaml] ‼  unknown key '{k}' ignored")
+                print(f"[from_yaml] ‼ unknown key '{k}' ignored")
                 continue
-
-            # tuple-ify list fields (e.g. video_dims, betas)
-            if k in ("video_dims", "betas") and isinstance(v, list):
+            if k == "video_dims" and isinstance(v, list):
                 v = tuple(v)
-            init_kwargs[k] = v
+            if k == "betas" and isinstance(v, list):
+                v = tuple(v)
+            init_kw[k] = v
 
-        cfg = cls(**init_kwargs)
-
-        # keep data.batch_size in sync with trainer batch_size
-        cfg.data.batch_size = cfg.batch_size
-
-        return cfg
+        return cls(**init_kw)
 
 
     def __repr__(self) -> str:

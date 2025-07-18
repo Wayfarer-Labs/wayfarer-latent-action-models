@@ -53,7 +53,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.ckpt_dir            = CKPT_DIR
         self._wandb_run          = None
         # -- data
-        self.batch_size         = config.batch_size
+        self.batch_size         = config.data_config.batch_size
         # -- optim
         self.optimizer: Optimizer = None
         self.scheduler            = None
@@ -104,7 +104,9 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
     def format_batch(self) -> Tensor:
-        pass
+        h, w = self.cfg.video_dims  
+        video_bnchw = torch.randn(self.batch_size, self.cfg.data_config.num_frames, self.cfg.in_dim, h, w) 
+        return video_bnchw
 
     def train_step(self, video_bnchw: Tensor) -> LogStats:
         with self.amp_ctx():
