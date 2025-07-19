@@ -4,6 +4,7 @@ import  pathlib
 import  dataclasses
 from    dataclasses import dataclass, field, asdict
 from    typing      import Optional, Any
+from    torch.utils.data import DataLoader, Dataset
 
 
 @dataclass
@@ -20,7 +21,7 @@ class DataConfig:
     sampling_strategy:   str      = "pi"
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "DataConfig":
+    def from_dict(cls, d: dict[str, Any]) -> DataConfig:
         recognised     = {k: v for k, v in d.items() if k     in cls.__annotations__}
         not_recognised = {k: v for k, v in d.items() if k not in cls.__annotations__}
         

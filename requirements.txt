@@ -1,5 +1,7 @@
+multimethod
 wandb
 einops
 torch
 toolz
+piq
 -e .

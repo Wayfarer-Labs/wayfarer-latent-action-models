@@ -1,14 +1,15 @@
 import  os
+import  piq
 import  time
 import  torch
 import  wandb
 import  pathlib
 import  dataclasses
+import  einops as eo
 from    typing      import TypedDict, NotRequired
+from    torch.types import Number
 from    torch       import Tensor
-from    torch.optim import Optimizer
-from    torch       import nn
-import torch.nn.functional as F
+import  torch.nn.functional as F
 
 from latent_action_models.models.latent_action_model import LatentActionModel, LatentActionModelOutput
 from latent_action_models.configs                    import LatentActionModelTrainingConfig
@@ -26,6 +27,8 @@ class LogStats(TypedDict):
     learning_rate:  float
     weight_decay:   float
     iter_sec:       NotRequired[float]
+    psnr:           NotRequired[Number]
+    ssim:           NotRequired[Number]
 
 
 def create_latent_action_model(config: LatentActionModelTrainingConfig) -> LatentActionModel:
@@ -41,7 +44,7 @@ def create_latent_action_model(config: LatentActionModelTrainingConfig) -> Laten
         dropout         = config.dropout,
     )
 
-def kl_divergence(mean, logvar) -> Tensor:
+def kl_divergence(mean: Tensor, logvar: Tensor) -> Tensor:
     return -0.5 * torch.sum(1 + logvar - mean ** 2 - logvar.exp(), dim=1).mean()
 
 class Trainer_LatentActionModel(BaseTrainer):
@@ -82,7 +85,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                 "optimizer":  self.optimizer.state_dict(),
                 "scheduler":  self.scheduler.state_dict(),
                 "cfg":        dataclasses.asdict(self.cfg),
-                "torch_rng":  torch.get_rng_state(),
+                "torch_rng":  torch     .get_rng_state(),
                 "cuda_rng":   torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
             },
             path,
@@ -108,15 +111,24 @@ class Trainer_LatentActionModel(BaseTrainer):
             total_loss  = mse_loss + (self.beta * kl_loss)
             grad_norm   = self.optim_step(total_loss)
 
-            return LogStats( loss           = total_loss    .item(),
-                             kl_loss         = kl_loss      .item(), 
-                             recon_loss      = mse_loss     .item(),
-                             mu              = lam_outputs['mean_bn1d'],
-                             logvar          = lam_outputs['logvar_bn1d'],
-                             grad_norm       = grad_norm,
-                             learning_rate   = self.optimizer.param_groups[0]["lr"],
-                             weight_decay    = self.optimizer.param_groups[0]["weight_decay"])
+            
+            
+            if self.should_log:
+                reconstructed_frames_nchw   = eo.rearrange('b n c h w -> (b n) c h w')
+                future_frame_video_nchw     = eo.rearrange('b n c h w -> (b n) c h w')
+                psnr                        = piq.psnr(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
+                ssim                        = piq.ssim(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
 
+            return LogStats( loss           = total_loss    .item(),
+                            kl_loss         = kl_loss       .item(), 
+                            recon_loss      = mse_loss      .item(),
+                            mu              = lam_outputs['mean_bn1d'],
+                            logvar          = lam_outputs['logvar_bn1d'],
+                            grad_norm       = grad_norm,
+                            learning_rate   = self.optimizer.param_groups[0]["lr"],
+                            weight_decay    = self.optimizer.param_groups[0]["weight_decay"],
+                            psnr            = psnr if self.should_log else None,
+                            ssim            = ssim if self.should_log else None)
 
     def log_step(self, stats: LogStats) -> None:
         # -- lazy init wandb
@@ -138,7 +150,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             "loss/total":           stats["loss"],
             "loss/recon":           stats["recon_loss"],
             "loss/kl":              stats["kl_loss"],
-
+        
             # -- optimisation
             "optim/grad_norm":      stats["grad_norm"],
             "optim/lr":             stats["learning_rate"],
@@ -148,6 +160,10 @@ class Trainer_LatentActionModel(BaseTrainer):
             "latent/mu_mean":       mu_mean,
             "latent/mu_std":        mu_std,
             "latent/sigma_mean":    sigma_mean,
+
+            # -- reconstruction metrics
+            "reconstruction/psnr":  stats.get("psnr"),
+            "reconstruction/ssim":  stats.get("ssim"),
         }
 
         if "iter_sec" in stats: wandb_dict["perf/iter_sec"] = stats["iter_sec"]
