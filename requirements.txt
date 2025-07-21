@@ -4,4 +4,7 @@ einops
 torch
 toolz
 piq
+tqdm
+umap-learn[plot]
+kmeans-pytorch
 -e .

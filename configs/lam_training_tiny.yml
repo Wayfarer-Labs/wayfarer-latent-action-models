@@ -34,6 +34,6 @@ data:
   randomize: true
   resolution: 256
   num_frames: 2
-  output_format: "t h w c"
+  output_format: "t c h w"
   samples_per_epoch: 10000000
   sampling_strategy: pi

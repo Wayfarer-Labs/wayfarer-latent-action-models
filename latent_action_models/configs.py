@@ -2,9 +2,9 @@ from __future__ import annotations
 import  yaml
 import  pathlib
 import  dataclasses
-from    dataclasses import dataclass, field, asdict
-from    typing      import Optional, Any
-from    torch.utils.data import DataLoader, Dataset
+from    dataclasses         import dataclass, field, asdict
+from    typing              import Optional, Any
+from    torch.utils.data    import DataLoader, Dataset
 
 
 @dataclass
@@ -16,7 +16,7 @@ class DataConfig:
     randomize:           bool     = True
     resolution:          int      = 256
     num_frames:          int      = 2
-    output_format:       str      = "t h w c"
+    output_format:       str      = "t c h w"
     samples_per_epoch:   int      = 1_000_000
     sampling_strategy:   str      = "pi"
 
