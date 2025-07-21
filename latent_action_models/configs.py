@@ -56,7 +56,7 @@ class BaseTrainerConfig:
     max_steps:       int                    = 100_000
     log_every:       int                    = 100
     ckpt_every:      int                    = 5_000
-
+    val_every:       int                    = 2_500
 
 @dataclass
 class LatentActionModelTrainingConfig(BaseTrainerConfig):
@@ -71,6 +71,8 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     dropout:         float           = 0.0
 
     beta:            float           = 0.0    # KL weight
+    val_num_samples_umap:   int      = 1000
+    val_num_samples_recon:  int      = 5
 
     @classmethod
     def from_yaml(cls, yaml_path: str | pathlib.Path) -> LatentActionModelTrainingConfig:

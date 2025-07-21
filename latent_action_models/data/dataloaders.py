@@ -1,4 +1,4 @@
-import  multimethod
+from    multimethod import multimethod
 import  torch
 from    typing                         import Literal
 from    torch                          import Tensor
@@ -19,7 +19,11 @@ class RandomDataset(Dataset):
         return 1_000
 
     def __getitem__(self, index) -> Tensor:
-        return torch.randn(self.n_frames, 3, self.height, self.width)
+        video_bnchw = torch.randn(self.n_frames, 3, self.height, self.width)
+        video_bnchw += abs(video_bnchw.min())
+        video_bnchw /= video_bnchw.max()
+        assert video_bnchw.max() <= 1. and video_bnchw.min() >= 0.
+        return video_bnchw
 
 
 @multimethod

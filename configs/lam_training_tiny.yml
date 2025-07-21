@@ -24,6 +24,9 @@ num_dec_blocks: 4               # lam_dec_blocks
 num_heads: 4                    # lam_num_heads
 dropout: 0.0
 beta: 0.2                     # KL weight
+val_num_samples_umap: 5000
+val_num_samples_recon: 5
+val_every: 5
 
 # -- dataset
 data:

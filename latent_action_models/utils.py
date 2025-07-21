@@ -1,4 +1,5 @@
 import  os
+import  wandb
 import  torch
 import  einops as eo
 from    torch import Tensor
@@ -46,3 +47,6 @@ def init_distributed() -> tuple[int, int, torch.device]:
         device = torch.device("cpu")
 
     return rank, world_size, device
+
+def as_wandb_video(video_nchw: Tensor, title: str) -> wandb.Video:
+    pass

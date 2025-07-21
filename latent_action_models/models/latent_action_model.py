@@ -12,16 +12,21 @@ import  latent_action_models.utils as utils
 class ActionEncodingInfo(TypedDict):
     action_bn1d:        Tensor
     mean_bn1d:          Tensor
-    var_bn1d:           Tensor
+    logvar_bn1d:        Tensor
 
 class ActionDecodingInfo(TypedDict):
+    condition_video_bnchw:     Tensor
     reconstructed_video_bnchw: Tensor
 
 class LatentActionModelOutput(TypedDict):
-    video_patches_bnpd:         Tensor
+    # -- populated during inference: groundtruth next-state
+    groundtruth_video_bnchw:    Tensor
+    # -- encoding
     action_bn1d:                Tensor
     mean_bn1d:                  Tensor
     logvar_bn1d:                Tensor
+    # -- reconstruction
+    condition_video_bnchw:      Tensor
     reconstructed_video_bnchw:  Tensor
 
 
@@ -102,11 +107,12 @@ class LatentActionModel(nn.Module):
                                     logvar_bn1d  = eo.rearrange(logvar_bv,  '(b n) d -> b n 1 d', b=B))
 
     def decode_to_frame(self,
-                        video_patches_bnpd: Tensor,
-                        action_bn1d:        Tensor) -> ActionDecodingInfo:
+                        video_bnchw: Tensor,
+                        action_bn1d: Tensor) -> ActionDecodingInfo:
         # -- d: patch_token_dim. raw patchified video (not encoding) to prevent collusion between encoder/decoder
         # -- v: vae_dim (dimension of mixture of gaussians in vae)
         # -- c: model_dim, dimension of the pixel decoder (also identical to encoder dim)
+        video_patches_bnpd           = self._patchify(video_bnchw)
         prev_video_proj_patches_bnpc = self.patch_proj(video_patches_bnpd)
         action_proj_patches_bn1c     = self.action_proj  (action_bn1d)
 
@@ -114,15 +120,17 @@ class LatentActionModel(nn.Module):
         video_reconstruction_bnpd   = F.sigmoid(video_reconstruction_bnpd)
         video_reconstruction_bnchw  = self._unpatchify(video_reconstruction_bnpd)
 
-        return ActionDecodingInfo(reconstructed_video_bnchw = video_reconstruction_bnchw)
+        return ActionDecodingInfo(condition_video_bnchw     = video_bnchw,
+                                  reconstructed_video_bnchw = video_reconstruction_bnchw)
 
     def forward(self, video_bnchw: Tensor) -> LatentActionModelOutput:
-        action_info: ActionEncodingInfo         = self.encode_to_actions(video_bnchw)
-        reconstruction_info: ActionDecodingInfo = self.decode_to_frame  (video_patches_bnpd := self._patchify(video_bnchw)[:,:-1,::],
+        action_info:         ActionEncodingInfo = self.encode_to_actions(video_bnchw)
+        groundtruth_video_bnchw                 = video_bnchw[:,:-1,::]
+        reconstruction_info: ActionDecodingInfo = self.decode_to_frame  (groundtruth_video_bnchw,
                                                                          action_info['action_bn1d'])
-        return LatentActionModelOutput( video_patches_bnpd = video_patches_bnpd,
-                                       **action_info,
-                                       **reconstruction_info )
+        return LatentActionModelOutput(groundtruth_video_bnchw = groundtruth_video_bnchw,
+                                        **action_info,
+                                        **reconstruction_info)
 
 if __name__ == '__main__':
     video_bnchw = torch.randn(4, 32, 3, 224, 224)

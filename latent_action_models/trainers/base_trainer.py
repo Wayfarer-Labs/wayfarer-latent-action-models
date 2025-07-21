@@ -5,8 +5,9 @@ from torch.optim       import AdamW
 from torch.nn          import utils
 from torch             import nn, Tensor
 
-from latent_action_models.configs   import BaseTrainerConfig
-from latent_action_models.utils     import init_distributed
+from latent_action_models.configs           import BaseTrainerConfig
+from latent_action_models.utils             import init_distributed
+from latent_action_models.data.dataloaders  import create_dataloader
 
 CKPT_DIR = 'checkpoints/' # global cause im very cool and special
 
@@ -22,7 +23,9 @@ class BaseTrainer(nn.Module):
         self.device         = torch.device(device)
         self.global_step    = 0
         self.batch_size     = cfg.data_config.batch_size
-
+        # -- data
+        self.dataloader     = create_dataloader(self.cfg.data_config)
+        self.iter_loader    = iter(self.dataloader)
         # -- dirs
         self.ckpt_dir       = pathlib.Path(cfg.ckpt_dir or CKPT_DIR)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -100,8 +103,15 @@ class BaseTrainer(nn.Module):
     def should_train(self) -> bool:
         return self.global_step < self.cfg.max_steps
 
+    @property
+    def should_validate(self) -> bool:
+        return self.global_step % self.cfg.val_every == 0 and self.rank == 0
+
     def amp_ctx(self):
         return torch.amp.autocast(self.device.type) if self.use_amp else nullcontext()
 
     @abstractmethod
-    def train(self) -> None: raise NotImplementedError
+    def train(self) -> None:    raise NotImplementedError
+
+    @abstractmethod
+    def validate(self) -> None: raise NotImplementedError

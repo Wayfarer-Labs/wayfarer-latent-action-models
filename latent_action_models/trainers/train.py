@@ -3,19 +3,21 @@ import  piq
 import  time
 import  torch
 import  wandb
+import  random
 import  pathlib
 import  dataclasses
 import  einops as eo
+from    pathlib     import Path
 from    typing      import TypedDict, NotRequired
 from    torch.types import Number
 from    torch       import Tensor
 import  torch.nn.functional as F
 
-from latent_action_models.models.latent_action_model import LatentActionModel, LatentActionModelOutput
-from latent_action_models.configs                    import LatentActionModelTrainingConfig
-from latent_action_models.base_trainer               import BaseTrainer
-
-
+from latent_action_models.models.latent_action_model    import ActionEncodingInfo, LatentActionModel, LatentActionModelOutput
+from latent_action_models.configs                       import LatentActionModelTrainingConfig
+from latent_action_models.trainers.base_trainer         import BaseTrainer
+from latent_action_models.action_creation.clustering    import umap_visualization
+from latent_action_models.utils                         import as_wandb_video
 
 class LogStats(TypedDict):
     loss:           float
@@ -94,14 +96,13 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
     def format_batch(self) -> Tensor:
-        h, w = self.cfg.video_dims  
-        video_bnchw = torch.randn(self.batch_size, self.cfg.data_config.num_frames, self.cfg.in_dim, h, w) 
-        return video_bnchw
+        try:    video_bnchw = next(self.iter_loader)
+        except  StopIteration: self.iter_loader = iter(self.dataloader) ; return self.format_batch()
+        return  video_bnchw
+
 
     def train_step(self, video_bnchw: Tensor) -> LogStats:
         with self.amp_ctx():
-            torch.autograd.set_detect_anomaly(True)
-
             future_frame_video_bnchw             = video_bnchw[:, 1:]
             lam_outputs: LatentActionModelOutput = self.model(video_bnchw)
             reconstructed_frames_bnchw           = lam_outputs['reconstructed_video_bnchw']
@@ -110,12 +111,12 @@ class Trainer_LatentActionModel(BaseTrainer):
             kl_loss     = kl_divergence(lam_outputs['mean_bn1d'], lam_outputs['logvar_bn1d'])
             total_loss  = mse_loss + (self.beta * kl_loss)
             grad_norm   = self.optim_step(total_loss)
-
-            
             
             if self.should_log:
-                reconstructed_frames_nchw   = eo.rearrange('b n c h w -> (b n) c h w')
-                future_frame_video_nchw     = eo.rearrange('b n c h w -> (b n) c h w')
+                reconstructed_frames_nchw   = eo.rearrange(lam_outputs['reconstructed_video_bnchw'],
+                                                            'b n c h w -> (b n) c h w')
+                future_frame_video_nchw     = eo.rearrange(future_frame_video_bnchw,
+                                                            'b n c h w -> (b n) c h w')
                 psnr                        = piq.psnr(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
                 ssim                        = piq.ssim(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
 
@@ -178,12 +179,71 @@ class Trainer_LatentActionModel(BaseTrainer):
             info:        LogStats = self.train_step(video_bnchw) ; iter_time    = time.time() - start_time
             info['iter_sec']      = iter_time / self.batch_size
 
-            if self.should_log:     self.log_step(info)
-            if self.should_save:    self.save_checkpoint(self.ckpt_dir          / self.save_path)
+            if self.should_log:      self.log_step(info)
+            if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
+            if self.should_validate: self.validate()
             self.global_step     += 1
 
         self.save_checkpoint(self.ckpt_dir / self.save_path)
         return
+
+
+    def validate(self) -> None:
+        num_processed_batches       = 0
+        num_batches_umap            = self.cfg.val_num_samples_umap // self.batch_size
+        # -- umap visualization
+        latent_actions_list_bn1d    = []
+        # -- reconstruction visualization. choose indices to keep for reconstruction
+        num_recon_samples           = self.cfg.val_num_samples_recon
+        recon_batch_idx: set[int]   = set(random.sample(range(num_batches_umap), k=num_recon_samples))
+        recon_videos_list_bnchw     = []
+        model: LatentActionModel    = self._model_unwrapped() # will this interfere with ddp??
+
+        while num_processed_batches < num_batches_umap:
+            video_bnchw: Tensor                     = self  .format_batch()
+            action_info: ActionEncodingInfo         = model .encode_to_actions(video_bnchw)
+            latent_actions_list_bn1d               += [action_info['mean_bn1d']]
+
+            if num_processed_batches in recon_batch_idx:
+                recon_videos_list_bnchw            += [video_bnchw]
+            
+            num_processed_batches                  += 1
+        
+        if self._wandb_run:
+            # -- umap 
+            latent_actions_bn1d             = torch.cat   (latent_actions_list_bn1d, dim=0)
+            latent_actions_n1d              = eo.rearrange(latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
+
+            umap_embed_n2, cluster_ids_n    = umap_visualization(latent_actions_n1d,
+                                                                 vis_filename=f'umap_visualization_{self.save_path}'.replace('.pt', ''))
+
+            table = wandb.Table(columns=['umap_x', 'umap_y', 'cluster'])
+            for (x,y), c in zip(umap_embed_n2, cluster_ids_n):
+                table.add_data(x,y, int(c))
+
+            scatter = wandb.plot.scatter(table, "umap_x", "umap_y", title="UMAP Projection of Latent Actions")
+
+            # -- reconstruction of image
+            recon_videos_bnchw                      = torch.cat(recon_videos_list_bnchw, dim=0)
+            lam_outputs: LatentActionModelOutput    = model.forward(recon_videos_bnchw)
+
+            condition_video_bnchw:  Tensor          = lam_outputs["condition_video_bnchw"]
+            recon_video_bnchw:      Tensor          = lam_outputs["reconstructed_video_bnchw"]
+            gt_video_bnchw:         Tensor          = lam_outputs["groundtruth_video_bnchw"]
+            
+            video_table                             = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
+            for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
+                table.add_data(
+                    as_wandb_video(cond,  "Conditioning"),
+                    as_wandb_video(recon, "Predicted next-frame"),
+                    as_wandb_video(gt,    "Ground-truth next-frame"),
+                )
+
+
+            wandb.log({
+                "UMAP Scatter": scatter,
+                "Reconstruction": video_table,
+            }, step=self.global_step)
 
 if __name__ == "__main__":
     config = LatentActionModelTrainingConfig.from_yaml("configs/lam_training_tiny.yml")
