@@ -66,16 +66,22 @@ def _dataset(dataset: Literal["call_of_duty"], config: DataConfig, rank: int = 0
 
     clips = _shard_for_rank(clips, rank=rank)
 
+    return DALI_VideoDataset(clips,
+                             resolution=config.resolution,
+                             num_frames=config.num_frames,
+                             batch_size=config.batch_size,
+                             num_threads=config.num_threads)
+
 
 def create_dataloader(config: DataConfig, rank: int = 0) -> DataLoader:
     # TODO: make sure video is rescaled to 0/1 
     dataset = _dataset(config.env_source, config, rank)
 
     if isinstance(dataset, DALI_VideoDataset):
-        return DataLoader(_dataset(config.env_source, config),
+        return DataLoader(_dataset(config.dataset_name, config),
                           batch_size=1,
-                          shuffle=config.randomize)
+                          shuffle=True)
     else:
-        return DataLoader(_dataset(config.env_source, config),
+        return DataLoader(_dataset(config.dataset_name, config),
                           batch_size=config.batch_size,
-                          shuffle=config.randomize)
+                          shuffle=True)
