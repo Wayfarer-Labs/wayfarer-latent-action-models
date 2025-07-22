@@ -57,7 +57,6 @@ class BaseTrainer(nn.Module):
     @abstractmethod
     def save_checkpoint(self, path: os.PathLike) -> None: raise NotImplementedError
 
-
     def optim_step(self, loss: Tensor) -> float:
         self.optimizer.zero_grad(set_to_none=True)
 
