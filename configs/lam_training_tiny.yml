@@ -24,9 +24,9 @@ num_dec_blocks: 4               # lam_dec_blocks
 num_heads: 4                    # lam_num_heads
 dropout: 0.0
 beta: 0.2                     # KL weight
-val_num_samples_umap: 5000
+val_num_samples_umap: 50
 val_num_samples_recon: 5
-val_every: 5
+val_every: 1
 
 # -- dataset
 data:
@@ -36,7 +36,7 @@ data:
   padding: repeat
   randomize: true
   resolution: 256
-  num_frames: 2
+  num_frames: 8
   output_format: "t c h w"
   samples_per_epoch: 10000000
   sampling_strategy: pi

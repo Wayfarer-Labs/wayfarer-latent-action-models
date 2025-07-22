@@ -1,5 +1,5 @@
 multimethod
-wandb
+wandb[media]
 einops
 torch
 toolz

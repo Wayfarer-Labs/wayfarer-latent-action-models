@@ -7,7 +7,6 @@ import  random
 import  pathlib
 import  dataclasses
 import  einops as eo
-from    pathlib     import Path
 from    typing      import TypedDict, NotRequired
 from    torch.types import Number
 from    torch       import Tensor
@@ -17,7 +16,8 @@ from latent_action_models.models.latent_action_model    import ActionEncodingInf
 from latent_action_models.configs                       import LatentActionModelTrainingConfig
 from latent_action_models.trainers.base_trainer         import BaseTrainer
 from latent_action_models.action_creation.clustering    import umap_visualization
-from latent_action_models.utils                         import as_wandb_video
+from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, broadcast_from_rank
+
 
 class LogStats(TypedDict):
     loss:           float
@@ -175,9 +175,9 @@ class Trainer_LatentActionModel(BaseTrainer):
 
     def train(self)   -> None:
         while self.should_train:
-            video_bnchw: Tensor   = self.format_batch()          ; start_time   = time.time()
-            info:        LogStats = self.train_step(video_bnchw) ; iter_time    = time.time() - start_time
-            info['iter_sec']      = iter_time / self.batch_size
+            video_bnchw: Tensor   =  self.format_batch()          ; start_time   = time.time()
+            info:        LogStats =  self.train_step(video_bnchw) ; iter_time    = time.time() - start_time
+            info['iter_sec']      =  iter_time / self.batch_size
 
             if self.should_log:      self.log_step(info)
             if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
@@ -187,63 +187,62 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.save_checkpoint(self.ckpt_dir / self.save_path)
         return
 
-
+    @torch.no_grad()
     def validate(self) -> None:
-        num_processed_batches       = 0
-        num_batches_umap            = self.cfg.val_num_samples_umap // self.batch_size
+        num_recon_samples           = self.cfg.val_num_samples_recon
+        num_batches_umap            = max(self.cfg.val_num_samples_umap // self.batch_size, num_recon_samples)
         # -- umap visualization
         latent_actions_list_bn1d    = []
         # -- reconstruction visualization. choose indices to keep for reconstruction
-        num_recon_samples           = self.cfg.val_num_samples_recon
-        recon_batch_idx: set[int]   = set(random.sample(range(num_batches_umap), k=num_recon_samples))
+        idx_tensor                  = torch.tensor(random.sample(range(num_batches_umap), k=num_recon_samples),
+                                                   dtype=torch.long, device=self.device)
+        recon_batch_idx: set[int]   = set(broadcast_from_rank(idx_tensor, rank=0).tolist())
         recon_videos_list_bnchw     = []
         model: LatentActionModel    = self._model_unwrapped() # will this interfere with ddp??
 
-        while num_processed_batches < num_batches_umap:
+        for i in range(num_batches_umap):
             video_bnchw: Tensor                     = self  .format_batch()
             action_info: ActionEncodingInfo         = model .encode_to_actions(video_bnchw)
             latent_actions_list_bn1d               += [action_info['mean_bn1d']]
 
-            if num_processed_batches in recon_batch_idx:
+            if i in recon_batch_idx:
                 recon_videos_list_bnchw            += [video_bnchw]
-            
-            num_processed_batches                  += 1
         
         if self._wandb_run:
             # -- umap 
-            latent_actions_bn1d             = torch.cat   (latent_actions_list_bn1d, dim=0)
-            latent_actions_n1d              = eo.rearrange(latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
-
-            umap_embed_n2, cluster_ids_n    = umap_visualization(latent_actions_n1d,
-                                                                 vis_filename=f'umap_visualization_{self.save_path}'.replace('.pt', ''))
-
-            table = wandb.Table(columns=['umap_x', 'umap_y', 'cluster'])
-            for (x,y), c in zip(umap_embed_n2, cluster_ids_n):
-                table.add_data(x,y, int(c))
-
-            scatter = wandb.plot.scatter(table, "umap_x", "umap_y", title="UMAP Projection of Latent Actions")
+            latent_actions_bn1d = torch.cat     (latent_actions_list_bn1d, dim=0)
+            latent_actions_n1d  = eo.rearrange  (latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
+            latent_actions_n1d  = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
 
             # -- reconstruction of image
             recon_videos_bnchw                      = torch.cat(recon_videos_list_bnchw, dim=0)
             lam_outputs: LatentActionModelOutput    = model.forward(recon_videos_bnchw)
+            condition_video_bnchw                   = gather_to_rank(lam_outputs["condition_video_bnchw"],     dst=0, dim=0, cat=True)
+            recon_video_bnchw                       = gather_to_rank(lam_outputs["reconstructed_video_bnchw"], dst=0, dim=0, cat=True)
+            gt_video_bnchw                          = gather_to_rank(lam_outputs["groundtruth_video_bnchw"],   dst=0, dim=0, cat=True)
 
-            condition_video_bnchw:  Tensor          = lam_outputs["condition_video_bnchw"]
-            recon_video_bnchw:      Tensor          = lam_outputs["reconstructed_video_bnchw"]
-            gt_video_bnchw:         Tensor          = lam_outputs["groundtruth_video_bnchw"]
-            
-            video_table                             = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
-            for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
-                table.add_data(
-                    as_wandb_video(cond,  "Conditioning"),
-                    as_wandb_video(recon, "Predicted next-frame"),
-                    as_wandb_video(gt,    "Ground-truth next-frame"),
-                )
+            if self.rank == 0:
+                # -- umap
+                umap_table                      = wandb.Table(columns=['umap_x', 'umap_y', 'cluster'])
+                umap_embed_n2, cluster_ids_n    = umap_visualization(latent_actions_n1d, vis_filename=f'umap_visualization_{self.save_path}'.replace('.pt', ''))
+                
+                for (x,y), c in zip(umap_embed_n2, cluster_ids_n):
+                    umap_table.add_data(x,y, int(c))
 
+                scatter = wandb.plot.scatter(umap_table, "umap_x", "umap_y", title="UMAP Projection of Latent Actions")
 
-            wandb.log({
-                "UMAP Scatter": scatter,
-                "Reconstruction": video_table,
-            }, step=self.global_step)
+                # -- reconstruction
+                video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
+                for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
+                    video_table.add_data(as_wandb_video(cond,  "Conditioning"),
+                                         as_wandb_video(recon, "Predicted next-frame"),
+                                         as_wandb_video(gt,    "Ground-truth next-frame"))
+                wandb.log({
+                    "UMAP Scatter":     scatter,
+                    "Reconstruction":   video_table,
+                },  step=self.global_step)
+
+        barrier()
 
 if __name__ == "__main__":
     config = LatentActionModelTrainingConfig.from_yaml("configs/lam_training_tiny.yml")
