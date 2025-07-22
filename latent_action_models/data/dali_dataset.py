@@ -10,16 +10,6 @@ from nvidia.dali.pipeline       import pipeline_def
 
 from latent_action_models.data.clip_metadata_generator import ClipEntry
 
-__all__ = ["DALI_VideoDataset", "create_dali_video_dataset"]
-
-
-def _infer_ddp_shard() -> tuple[int, int]:
-    """Return (rank, world_size) even when torch.distributed is not initialised."""
-    if torch.distributed.is_available() and torch.distributed.is_initialized():
-        return torch.distributed.get_rank(), torch.distributed.get_world_size()
-    else:
-        return 0, 1
-
 
 @pipeline_def
 def _dali_pipe(filenames: Sequence[str], *, num_frames: int, stride: int, resize: int):
