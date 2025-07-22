@@ -70,7 +70,7 @@ class LatentActionModel(nn.Module):
                                             num_blocks=num_dec_blocks,
                                             num_heads=num_heads,
                                             dropout=dropout)
-                                            
+
         print(f'[LatentActionModel] ✅ model initialized with num_params={sum(p.numel() for p in self.parameters()):,}')
     
     
