@@ -3,22 +3,20 @@ import  yaml
 import  pathlib
 import  dataclasses
 from    dataclasses         import dataclass, field, asdict
-from    typing              import Optional, Any
+from    typing              import Optional, Any, Literal
 from    torch.utils.data    import DataLoader, Dataset
 
+
+DatasetType = Literal["gta_4", "call_of_duty", "random"]
 
 @dataclass
 class DataConfig:
     batch_size:          int      = 8
-    data_root:           str      = "./data"
-    env_source:          str      = "game"
-    padding:             str      = "repeat"
-    randomize:           bool     = True
-    resolution:          int      = 256
+    dataset_name:  DatasetType    = "gta_4"
+    resolution:          int      = 256 # TODO use this.
     num_frames:          int      = 2
-    output_format:       str      = "t c h w"
     samples_per_epoch:   int      = 1_000_000
-    sampling_strategy:   str      = "pi"
+    num_threads:         int      = 8
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DataConfig:

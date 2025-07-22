@@ -63,6 +63,11 @@ def as_wandb_video(
     return wandb.Video(vid_nchw_np, caption=title, fps=fps, format=fmt)
 
 
+def get_world_size() -> int:
+    world_size = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+    return world_size
+
+
 def barrier():
     if dist.is_initialized(): dist.barrier()
 

@@ -128,6 +128,7 @@ class LatentActionModel(nn.Module):
         groundtruth_video_bnchw                 = video_bnchw[:,:-1,::]
         reconstruction_info: ActionDecodingInfo = self.decode_to_frame  (groundtruth_video_bnchw,
                                                                          action_info['action_bn1d'])
+
         return LatentActionModelOutput(groundtruth_video_bnchw = groundtruth_video_bnchw,
                                         **action_info,
                                         **reconstruction_info)

@@ -36,15 +36,17 @@ class ClipIterator:
 
 def make_pipeline(source:       ClipIterator,
                   batch_size:   int,
+                  num_frames:   int,
                   output_type = types.RGB,
                   num_threads:  int = 4,
+                  resolution:   int = 256,
                   device_id:    int = 0) -> Pipeline:
 
     @pipeline_def(batch_size=batch_size, num_threads=num_threads, device_id=device_id)
     def _factory(source: ClipIterator, output_type=types.RGB) -> DataNode:
         vid_buf, start, end, stride = fn.external_source(
             source=source,
-            num_outputs=4,
+            num_outputs=num_frames,
             batch=False, # one sample at a time
             dtype=[types.UINT8, types.INT32, types.INT32, types.INT32],
             device="cpu"
@@ -57,30 +59,35 @@ def make_pipeline(source:       ClipIterator,
             device="mixed",
             output_type=output_type
         )
-        frames = fn.transpose(frames, perm=[0,3,1,2])  # → (F,C,H,W)
+        frames = fn.resize(frames, resize_x=resolution, resize_y=resolution)
+        frames = fn.transpose(frames, perm=[0,3,1,2])  # (N,C,H,W)
         return frames
-    
+
     return _factory(source, output_type)
 
 
-class DALIVideoDataset(torch.utils.data.IterableDataset):
+class DALI_VideoDataset(torch.utils.data.IterableDataset):
     """
     Thin PyTorch wrapper around a single-GPU DALI pipeline.
     """
     def __init__(self,
                  clips:         list[ClipEntry],
+                 num_frames:    int = 16,
                  batch_size:    int = 8,
                  num_threads:   int = 4,
+                 resolution:    int = 256,
                  shuffle:       bool = True) -> None:
         self._source            = ClipIterator(clips, shuffle)
         self._pipe: Pipeline    = make_pipeline(source      = self._source,
+                                                num_frames  = num_frames,
                                                 batch_size  = batch_size,
                                                 num_threads = num_threads,
+                                                resize      = resolution,
                                                 device_id   = torch.cuda.current_device()) ; self._pipe.build()
         self._it                = iter(DALIGenericIterator([self._pipe], ["video"], auto_reset=True))
 
     def __iter__(self): return self
 
     def __next__(self) -> torch.Tensor:
-        sample_bnchw = next(self._it)[0]["video"]   # shape (B,F,C,H,W), already on GPU
-        return sample_bnchw
+        sample_nchw = next(self._it)[0]["video"]   # shape (N,C,H,W), already on GPU
+        return sample_nchw

@@ -31,12 +31,8 @@ val_every: 1
 # -- dataset
 data:
   batch_size: 64                 # keep in sync with trainer batch_size
-  data_root: ../data
-  env_source: game
-  padding: repeat
-  randomize: true
-  resolution: 256
+  dataset_name: gta_4
   num_frames: 8
-  output_format: "t c h w"
+  resolution: 256
   samples_per_epoch: 10000000
-  sampling_strategy: pi
+  num_threads: 8
