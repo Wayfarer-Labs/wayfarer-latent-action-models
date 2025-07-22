@@ -189,25 +189,29 @@ class Trainer_LatentActionModel(BaseTrainer):
 
     @torch.no_grad()
     def validate(self) -> None:
-        num_recon_samples           = self.cfg.val_num_samples_recon
-        num_batches_umap            = max(self.cfg.val_num_samples_umap // self.batch_size, num_recon_samples)
+        # we assume we are going to have more umap samples than reconstruction samples (of course)
+        model: LatentActionModel    = self._model_unwrapped()
+        num_samples_umap            = self.cfg.val_num_samples_umap
+        num_samples_recon           = self.cfg.val_num_samples_recon
         # -- umap visualization
+        num_processed_umap_samples  = 0 ; _more_umap  = lambda: num_processed_umap_samples  < num_samples_umap
+        num_processed_recon_samples = 0 ; _more_recon = lambda: num_processed_recon_samples < num_samples_recon
         latent_actions_list_bn1d    = []
-        # -- reconstruction visualization. choose indices to keep for reconstruction
-        idx_tensor                  = torch.tensor(random.sample(range(num_batches_umap), k=num_recon_samples),
-                                                   dtype=torch.long, device=self.device)
-        recon_batch_idx: set[int]   = set(broadcast_from_rank(idx_tensor, rank=0).tolist())
         recon_videos_list_bnchw     = []
-        model: LatentActionModel    = self._model_unwrapped() # will this interfere with ddp??
 
-        for i in range(num_batches_umap):
-            video_bnchw: Tensor                     = self  .format_batch()
-            action_info: ActionEncodingInfo         = model .encode_to_actions(video_bnchw)
-            latent_actions_list_bn1d               += [action_info['mean_bn1d']]
+        while _more_umap() or _more_recon():
+            video_bnchw: Tensor                         = self  .format_batch()
+            if _more_umap():
+                action_info: ActionEncodingInfo         = model .encode_to_actions(video_bnchw)
+                latent_actions_list_bn1d               += [action_info['mean_bn1d']]
+                num_umap_samples_in_batch               = action_info['mean_bn1d'].shape[0] * action_info['mean_bn1d'].shape[1]
+                num_processed_umap_samples             += num_umap_samples_in_batch
+            
+            if _more_recon():
+                recon_videos_list_bnchw                += [video_bnchw[:num_samples_recon, ::]]
+                num_recon_samples_in_batch              = video_bnchw.shape[0]
+                num_processed_recon_samples            += num_recon_samples_in_batch
 
-            if i in recon_batch_idx:
-                recon_videos_list_bnchw            += [video_bnchw]
-        
         if self._wandb_run:
             # -- umap 
             latent_actions_bn1d = torch.cat     (latent_actions_list_bn1d, dim=0)
@@ -225,7 +229,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                 # -- umap
                 umap_table                      = wandb.Table(columns=['umap_x', 'umap_y', 'cluster'])
                 umap_embed_n2, cluster_ids_n    = umap_visualization(latent_actions_n1d, vis_filename=f'umap_visualization_{self.save_path}'.replace('.pt', ''))
-                
+
                 for (x,y), c in zip(umap_embed_n2, cluster_ids_n):
                     umap_table.add_data(x,y, int(c))
 
@@ -243,6 +247,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                 },  step=self.global_step)
 
         barrier()
+
 
 if __name__ == "__main__":
     config = LatentActionModelTrainingConfig.from_yaml("configs/lam_training_tiny.yml")
