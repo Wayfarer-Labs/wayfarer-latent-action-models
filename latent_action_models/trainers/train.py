@@ -16,7 +16,7 @@ from latent_action_models.models.latent_action_model    import ActionEncodingInf
 from latent_action_models.configs                       import LatentActionModelTrainingConfig
 from latent_action_models.trainers.base_trainer         import BaseTrainer
 from latent_action_models.action_creation.clustering    import umap_visualization
-from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, broadcast_from_rank
+from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank
 
 
 class LogStats(TypedDict):
@@ -244,7 +244,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                 wandb.log({
                     "UMAP Scatter":     scatter,
                     "Reconstruction":   video_table,
-                },  step=self.global_step)
+                },  step=self.global_step, commit=True)
 
         barrier()
 

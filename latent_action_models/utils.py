@@ -2,9 +2,10 @@ import  os
 import  wandb
 import  torch
 import  einops as eo
-from    typing import Literal, Optional
-from    torch import Tensor
-import  torch.distributed as dist
+from    datetime            import timedelta
+from    typing              import Literal, Optional
+from    torch               import Tensor
+import  torch.distributed   as dist
 
 # reused from adaworld repo 
 
@@ -35,18 +36,15 @@ def init_distributed() -> tuple[int, int, torch.device]:
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         torch.distributed.init_process_group(
             backend=backend,
-            timeout=torch.timedelta(minutes=30),
+            timeout=timedelta(minutes=30),
         )
 
     rank       = torch.distributed.get_rank()       if distributed else 0
     world_size = torch.distributed.get_world_size() if distributed else 1
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
-    if torch.cuda.is_available():
-        torch.cuda.set_device(local_rank)
-        device = torch.device("cuda", local_rank)
-    else:
-        device = torch.device("cpu")
+    if torch.cuda.is_available(): torch.cuda.set_device(local_rank) ; device = torch.device("cuda", local_rank)
+    else: device = torch.device("cpu")
 
     return rank, world_size, device
 
