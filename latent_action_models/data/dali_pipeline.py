@@ -17,7 +17,9 @@ class ClipIterator:
     """
     Yields (encoded_bytes, start, end, stride) for DALI external_source.
     """
-    def __init__(self, clips: list[ClipEntry], shuffle: bool = True) -> None:
+    def __init__(self, 
+                 clips:     list[ClipEntry],
+                 shuffle:   bool = True) -> None:
         self._clips = clips
         self._shuffle = shuffle
 
@@ -29,14 +31,14 @@ class ClipIterator:
         for idx in order:
             c = self._clips[idx]
             with open(c.video, "rb") as f: buf = np.frombuffer(f.read(), dtype=np.uint8)
-            yield buf, c.start, c.end + 1, c.stride # end is *exclusive*
+            yield buf, c.start, c.end + 1, c.stride
 
 
-def make_pipeline(source: ClipIterator,
-                  batch_size: int,
-                  output_type=types.RGB,
-                  num_threads: int = 4,
-                  device_id: int = 0) -> Pipeline:
+def make_pipeline(source:       ClipIterator,
+                  batch_size:   int,
+                  output_type = types.RGB,
+                  num_threads:  int = 4,
+                  device_id:    int = 0) -> Pipeline:
 
     @pipeline_def(batch_size=batch_size, num_threads=num_threads, device_id=device_id)
     def _factory(source: ClipIterator, output_type=types.RGB) -> DataNode:
