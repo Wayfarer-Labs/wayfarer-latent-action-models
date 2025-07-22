@@ -13,39 +13,22 @@ from    nvidia.dali.pipeline        import Pipeline, pipeline_def
 from    latent_action_models.data.clip_metadata_generator import ClipEntry
 
 
-class ClipIterator:
-    """
-    Yields (encoded_bytes, start, end, stride) for DALI external_source.
-    """
-    def __init__(self, 
-                 clips:     list[ClipEntry],
-                 shuffle:   bool = True) -> None:
-        self._clips = clips
-        self._shuffle = shuffle
-
-    def __iter__(self) -> Iterator[tuple[np.ndarray, int, int, int]]:
-        order = list(range(len(self._clips)))
-
-        if self._shuffle: random.shuffle(order)
-
-        for idx in order:
-            c = self._clips[idx]
-            with open(c.video, "rb") as f: buf = np.frombuffer(f.read(), dtype=np.uint8)
-            yield buf, c.start, c.end + 1, c.stride
-
 @pipeline_def
 def video_pipeline(clips: list[ClipEntry]):
     videos = fn.readers.video(
-        device="cpu",
+        device="gpu",
         filenames=[c.video for c in clips],
         sequence_length=16,
+        stride=4,
         shard_id=0,
         num_shards=1,
         random_shuffle=True,
-        initial_fill=2
-    )
-
-    return videos
+        initial_fill=2,
+        skip_vfr_check=True,
+        dtype=types.DALIDataType.FLOAT
+    )    
+    videos = fn.resize(videos, resize_x=256, resize_y=256)
+    return videos / 255.
 
 if __name__ == "__main__":
     from latent_action_models.data.clip_metadata_generator import _from_file, _GTA4_PATH
@@ -54,7 +37,7 @@ if __name__ == "__main__":
     print(nvidia.dali.__version__)       # e.g. 1.40.0.dev
 
     clips = _from_file('/home/sky/wayfarer-latent-action-models/latent_action_models/data/indices/gta4_clips.jsonl')
-
+    clips = [c for c in clips if c.codec == 'h264']
     pipe = video_pipeline(clips, batch_size=1, num_threads=1)
     pipe.build()
     for i in range(10):

@@ -15,20 +15,22 @@ _COD_PATH   = Path('/mnt/data/shahbuland/video-proc-2/datasets/cod-yt')
 def _probe(vid_path: Path, accurate=False):
     common = dict(
         cmd='ffprobe', v='error', select_streams='v:0',
-        show_entries='stream=nb_frames,r_frame_rate,duration'  # narrow output
+        show_entries='stream=nb_frames,r_frame_rate,duration,codec_name'  # narrow output
     )
     if accurate: common['count_frames'] = None  # VERY slow
 
     info        = ffmpeg.probe(str(vid_path), **common)
-    num, den    = map(int, info['streams'][0]['r_frame_rate'].split('/'))
+    s           = info['streams'][0]
+    num, den    = map(int, s['r_frame_rate'].split('/'))
     fps         = num / den if den else 0.0
+    codec       = s['codec_name']
 
     frames = (v := info['format']).get('nb_frames')
     if frames in (None, 'N/A') and accurate: frames = v.get('nb_read_frames')
     if frames in (None, 'N/A'):              frames = int(float(v['duration']) * fps +0.5) if 'duration' in v else None
     
-    if frames is None:  return None, None
-    else:               return int(frames), fps
+    if frames is None:  return frames,      fps, codec
+    else:               return int(frames), fps, codec
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,7 @@ class ClipEntry:
     start:  int                 # inclusive, native FPS
     end:    int                 # inclusive
     fps:    float               # native FPS
+    codec:  str
 
     @property
     def stride(self)    -> int: return max(1, round(self.fps / _TARGET_FPS))
@@ -49,7 +52,7 @@ class ClipEntry:
 
 @multimethod
 def _dataset_clips( dataset:    Literal["call_of_duty"],
-                    directory:  Path = _GTA4_PATH,
+                    directory:  Path = _COD_PATH,
                     limit:      Optional[int] = None) -> list[ClipEntry]:
     # NOTE Should read .mp4s
     videos = sorted(directory.glob('*.mp4'))
@@ -63,13 +66,13 @@ def _dataset_clips( dataset:    Literal["call_of_duty"],
     clips: list[ClipEntry] = []
 
     for video in tqdm(videos, desc="Reading clips for COD..."):
-        frames, fps = _probe(Path(video), accurate=False)
-
-        if frames is None or fps is None:
-            print(f'WARNING: Bad video found at {video} - no FPS/Frame count detected. Diagnose with ffprobe!')
+        frames, fps, codec = _probe(Path(video), accurate=False)
+        print(f'{codec=}')
+        if None in (frames, fps, codec):
+            print(f'WARNING: Bad video found at {video} - ({frames, fps, codec}) no FPS/Frame count detected. Diagnose with ffprobe!')
             continue
             
-        clip_entry = ClipEntry(video=str(video), csv=None, start=0, end=frames, fps=fps)
+        clip_entry = ClipEntry(video=str(video), csv=None, start=0, end=frames, fps=fps, codec=codec)
         clips     += [clip_entry]
     
     return clips
@@ -90,15 +93,15 @@ def _dataset_clips( dataset:    Literal["gta_4"],
     clips: list[ClipEntry] = []
 
     for video in tqdm(videos, desc="Reading clips for GTA4..."):
-        frames, fps = _probe(Path(video), accurate=False)
+        frames, fps, codec = _probe(Path(video), accurate=False)
         csv_path    = str(video).replace('.mkv', '.csv')
         csv_path    = csv_path if Path(csv_path).exists() else None 
 
-        if frames is None or fps is None:
-            print(f'WARNING: Bad video found at {video} - no FPS/Frame count detected. Diagnose with ffprobe!')
+        if None in (frames, fps, codec):
+            print(f'WARNING: Bad video found at {video} - ({frames, fps, codec}) no FPS/Frame count detected. Diagnose with ffprobe!')
             continue
-
-        clip_entry = ClipEntry(video=str(video), csv=csv_path, start=0, end=frames, fps=fps)
+        print(codec)
+        clip_entry = ClipEntry(video=str(video), csv=csv_path, start=0, end=frames, fps=fps, codec=codec)
         clips     += [clip_entry]
     
     return clips
