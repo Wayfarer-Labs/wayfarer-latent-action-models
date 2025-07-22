@@ -61,7 +61,7 @@ class DALI_VideoDataset(torch.utils.data.IterableDataset):
         self.clips      = clips
         self.batch_size = batch_size
         self.shuffle    = shuffle
-        device_id       = torch.device('cuda', rank)
+        device_id       = rank
         # shard filenames by rank to avoid overlap
         filenames       = [c.video for c in clips][rank::world]
 

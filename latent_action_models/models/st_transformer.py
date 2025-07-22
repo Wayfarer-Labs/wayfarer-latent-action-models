@@ -22,7 +22,7 @@ class PositionalEncoding(nn.Module):
         self.pos_enc = pe
 
     def forward(self, x: Tensor) -> Tensor:
-        return x + self.pos_enc[:x.shape[2]]#.cuda()
+        return x + self.pos_enc[:x.shape[2]].to(x.device)
 
 class SelfAttention(nn.Module):
     def __init__(

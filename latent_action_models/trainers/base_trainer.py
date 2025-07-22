@@ -36,7 +36,6 @@ class BaseTrainer(nn.Module):
                                 weight_decay=cfg.weight_decay,
                                 betas=cfg.betas)
 
-        # -- TODO choose a real schedule lol
         self.scheduler      = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, cfg.max_steps)
         self.max_grad_norm  = cfg.max_grad_norm
         self.use_amp        = cfg.amp

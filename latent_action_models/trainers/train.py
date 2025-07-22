@@ -29,6 +29,7 @@ class LogStats(TypedDict):
     learning_rate:  float
     weight_decay:   float
     iter_sec:       NotRequired[float]
+    batch_sec:      NotRequired[float]
     psnr:           NotRequired[Number]
     ssim:           NotRequired[Number]
 
@@ -114,9 +115,9 @@ class Trainer_LatentActionModel(BaseTrainer):
             
             if self.should_log:
                 reconstructed_frames_nchw   = eo.rearrange(lam_outputs['reconstructed_video_bnchw'],
-                                                            'b n c h w -> (b n) c h w')
+                                                            'b n c h w -> (b n) c h w').clip(0, 1)
                 future_frame_video_nchw     = eo.rearrange(future_frame_video_bnchw,
-                                                            'b n c h w -> (b n) c h w')
+                                                            'b n c h w -> (b n) c h w').clip(0, 1)
                 psnr                        = piq.psnr(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
                 ssim                        = piq.ssim(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
 
@@ -167,17 +168,19 @@ class Trainer_LatentActionModel(BaseTrainer):
             "reconstruction/ssim":  stats.get("ssim"),
         }
 
-        if "iter_sec" in stats: wandb_dict["perf/iter_sec"] = stats["iter_sec"]
+        if "iter_sec" in stats:     wandb_dict["perf/iter_sec"]     = stats["iter_sec"]
+        if "batch_sec" in stats:    wandb_dict["perf/batch_sec"]    = stats["batch_sec"]
 
         wandb.log(wandb_dict, step=self.global_step)
         print(f"[rank {self.rank}] {wandb_dict}")
 
 
     def train(self)   -> None:
-        while self.should_train:
-            video_bnchw: Tensor   =  self.format_batch()          ; start_time   = time.time()
+        while self.should_train and (start_time := time.time()):
+            video_bnchw: Tensor   =  self.format_batch()          ; batch_time   = time.time() - start_time
             info:        LogStats =  self.train_step(video_bnchw) ; iter_time    = time.time() - start_time
             info['iter_sec']      =  iter_time / self.batch_size
+            info['batch_sec']     =  batch_time
 
             if self.should_log:      self.log_step(info)
             if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
@@ -250,6 +253,6 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
 if __name__ == "__main__":
-    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_training_tiny.yml")
+    config = LatentActionModelTrainingConfig.from_yaml("configs/lam.yml")
     trainer = Trainer_LatentActionModel(config)
     trainer.train()
