@@ -33,7 +33,35 @@ class ClipIterator:
             with open(c.video, "rb") as f: buf = np.frombuffer(f.read(), dtype=np.uint8)
             yield buf, c.start, c.end + 1, c.stride
 
+@pipeline_def
+def video_pipeline(clips: list[ClipEntry]):
+    videos = fn.readers.video(
+        device="cpu",
+        filenames=[c.video for c in clips],
+        sequence_length=16,
+        shard_id=0,
+        num_shards=1,
+        random_shuffle=True,
+        initial_fill=2
+    )
 
+    return videos
+
+if __name__ == "__main__":
+    from latent_action_models.data.clip_metadata_generator import _from_file, _GTA4_PATH
+    import ctypes, nvidia.dali
+    ctypes.CDLL("libnvcuvid.so")         # should succeed
+    print(nvidia.dali.__version__)       # e.g. 1.40.0.dev
+
+    clips = _from_file('/home/sky/wayfarer-latent-action-models/latent_action_models/data/indices/gta4_clips.jsonl')
+
+    pipe = video_pipeline(clips, batch_size=1, num_threads=1)
+    pipe.build()
+    for i in range(10):
+        pipe_out = pipe.run()
+        pass
+
+exit()
 def make_pipeline(source:       ClipIterator,
                   batch_size:   int,
                   num_frames:   int,
@@ -49,8 +77,8 @@ def make_pipeline(source:       ClipIterator,
             num_outputs=num_frames,
             batch=False, # one sample at a time
             dtype=[types.UINT8, types.INT32, types.INT32, types.INT32],
-            device="cpu"
-        )
+            device="cpu")
+
         frames = fn.experimental.decoders.video(
             vid_buf,
             start_frame=start,
@@ -82,7 +110,7 @@ class DALI_VideoDataset(torch.utils.data.IterableDataset):
                                                 num_frames  = num_frames,
                                                 batch_size  = batch_size,
                                                 num_threads = num_threads,
-                                                resize      = resolution,
+                                                resolution  = resolution,
                                                 device_id   = torch.cuda.current_device()) ; self._pipe.build()
         self._it                = iter(DALIGenericIterator([self._pipe], ["video"], auto_reset=True))
 
@@ -91,3 +119,12 @@ class DALI_VideoDataset(torch.utils.data.IterableDataset):
     def __next__(self) -> torch.Tensor:
         sample_nchw = next(self._it)[0]["video"]   # shape (N,C,H,W), already on GPU
         return sample_nchw
+
+if __name__ == "__main__":
+    from latent_action_models.data.clip_metadata_generator import _from_file, _GTA4_PATH
+
+    clips = _from_file('/home/sky/wayfarer-latent-action-models/latent_action_models/data/indices/gta4_clips.jsonl')
+    dataset = DALI_VideoDataset(clips, num_frames=16, batch_size=8, num_threads=4, resolution=256, shuffle=True)
+    for sample in dataset:
+        print(sample.shape)
+        break
