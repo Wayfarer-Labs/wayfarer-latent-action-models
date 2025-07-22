@@ -68,9 +68,8 @@ def _dataset(dataset: Literal["call_of_duty"], config: DataConfig, rank: int = 0
                                      world=world)
 
 def create_dataloader(config: DataConfig) -> DataLoader:
-    # TODO: make sure video is rescaled to 0/1 
-    rank, world, device = init_distributed()
-    dataset = _dataset(config.dataset_name, config, rank, world)
+    rank, world, _  = init_distributed()
+    dataset         = _dataset(config.dataset_name, config, rank, world)
 
     if isinstance(dataset, DALI_VideoDataset):
         return DataLoader(dataset,
@@ -84,4 +83,3 @@ if __name__ == "__main__":
     data            = DataConfig()
     dl              = create_dataloader(data)
     video_bnchw     = next(iter(dl))
-    pass
