@@ -5,6 +5,7 @@ import  torch
 import  wandb
 import  random
 import  pathlib
+import traceback
 import  dataclasses
 import  einops as eo
 from    typing      import TypedDict, NotRequired
@@ -16,7 +17,7 @@ from latent_action_models.models.latent_action_model    import ActionEncodingInf
 from latent_action_models.configs                       import LatentActionModelTrainingConfig
 from latent_action_models.trainers.base_trainer         import BaseTrainer
 from latent_action_models.action_creation.clustering    import umap_visualization
-from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank
+from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, init_distributed
 
 
 class LogStats(TypedDict):
@@ -53,7 +54,8 @@ def kl_divergence(mean: Tensor, logvar: Tensor) -> Tensor:
 class Trainer_LatentActionModel(BaseTrainer):
     def __init__(self, config: LatentActionModelTrainingConfig) -> None:
         latent_action_model = create_latent_action_model(config)
-        super(Trainer_LatentActionModel, self).__init__(latent_action_model, config, device="cpu")
+        *_, device = init_distributed()
+        super(Trainer_LatentActionModel, self).__init__(latent_action_model, config, device=device)
         self.beta           = 0.
         self._wandb_run     = None
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
@@ -99,6 +101,10 @@ class Trainer_LatentActionModel(BaseTrainer):
     def format_batch(self) -> Tensor:
         try:    video_bnchw = next(self.iter_loader)
         except  StopIteration: self.iter_loader = iter(self.dataloader) ; return self.format_batch()
+        except  Exception as e:
+            print(f"[rank {self.rank}] error in format_batch: {e}") ; traceback.print_exc()
+            return self.format_batch()
+
         return  video_bnchw
 
 
@@ -171,14 +177,17 @@ class Trainer_LatentActionModel(BaseTrainer):
         if "iter_sec" in stats:     wandb_dict["perf/iter_sec"]     = stats["iter_sec"]
         if "batch_sec" in stats:    wandb_dict["perf/batch_sec"]    = stats["batch_sec"]
 
-        wandb.log(wandb_dict, step=self.global_step)
+        wandb.log(wandb_dict, step=self.global_step, commit=True)
         print(f"[rank {self.rank}] {wandb_dict}")
 
 
     def train(self)   -> None:
         while self.should_train and (start_time := time.time()):
+            barrier()
+            print(f"[rank {self.rank}] training step {self.global_step}")
             video_bnchw: Tensor   =  self.format_batch()          ; batch_time   = time.time() - start_time
             info:        LogStats =  self.train_step(video_bnchw) ; iter_time    = time.time() - start_time
+            print(f"[rank {self.rank}] batch dims {video_bnchw.shape} - batch time {batch_time} train time {iter_time} - batch checksum {video_bnchw.sum()}")
             info['iter_sec']      =  iter_time / self.batch_size
             info['batch_sec']     =  batch_time
 
@@ -186,6 +195,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
             if self.should_validate: self.validate()
             self.global_step     += 1
+            print(f"[rank {self.rank}] training step done {self.global_step}")
 
         self.save_checkpoint(self.ckpt_dir / self.save_path)
         return
@@ -215,7 +225,9 @@ class Trainer_LatentActionModel(BaseTrainer):
                 num_recon_samples_in_batch              = video_bnchw.shape[0]
                 num_processed_recon_samples            += num_recon_samples_in_batch
 
-        if self._wandb_run:
+        print(f"[rank {self.rank}] validation done with wandb_enabled={self._wandb_enabled}")
+
+        if self._wandb_enabled:
             # -- umap 
             latent_actions_bn1d = torch.cat     (latent_actions_list_bn1d, dim=0)
             latent_actions_n1d  = eo.rearrange  (latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
@@ -244,11 +256,15 @@ class Trainer_LatentActionModel(BaseTrainer):
                     video_table.add_data(as_wandb_video(cond,  "Conditioning"),
                                          as_wandb_video(recon, "Predicted next-frame"),
                                          as_wandb_video(gt,    "Ground-truth next-frame"))
-                wandb.log({
-                    "UMAP Scatter":     scatter,
-                    "Reconstruction":   video_table,
-                },  step=self.global_step, commit=True)
 
+                if self._wandb_run:
+                    print(f"[rank {self.rank}] logging to wandb")
+                    wandb.log({
+                        f"UMAP Scatter/{self.global_step}":     scatter,
+                        f"Reconstruction/{self.global_step}":   video_table,
+                    },  step=self.global_step, commit=True)
+
+        print(f"[rank {self.rank}] validation done")
         barrier()
 
 

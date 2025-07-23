@@ -12,16 +12,17 @@ from latent_action_models.data.clip_metadata_generator import ClipEntry
 
 
 @pipeline_def
-def _dali_pipe(filenames: Sequence[str], *, num_frames: int, stride: int, resize: int):
+def _dali_pipe(filenames: Sequence[str], *, num_frames: int, stride: int, resize: int, shard_id: int, num_shards: int):
     """Internal DALI pipeline definition (one per GPU)."""
     videos = fn.readers.video(
         device="gpu",  # GPU decode only
         filenames=filenames,
         sequence_length=num_frames,
         stride=stride,
-        num_shards=len(filenames),  # filenames already sharded, but DALI needs >0
         random_shuffle=True,
         skip_vfr_check=True,
+        shard_id=shard_id,
+        num_shards=num_shards,
         dtype=types.DALIDataType.FLOAT,
     )
     videos = fn.resize(videos, resize_x=resize, resize_y=resize)
@@ -63,7 +64,7 @@ class DALI_VideoDataset(torch.utils.data.IterableDataset):
         self.shuffle    = shuffle
         device_id       = rank
         # shard filenames by rank to avoid overlap
-        filenames       = [c.video for c in clips][rank::world]
+        filenames       = [c.video for c in clips]
 
         assert filenames, f"Rank {rank} received 0 clips after sharding!"
 
@@ -79,6 +80,8 @@ class DALI_VideoDataset(torch.utils.data.IterableDataset):
             num_threads=num_threads,
             device_id=device_id,
             resize=resolution,
+            shard_id=rank,
+            num_shards=world
         )
         self._pipe.build()
 

@@ -95,6 +95,8 @@ def gather_to_rank(tensor:  Tensor,
 
     rank       = dist.get_rank()
     world_size = dist.get_world_size()
+    
+    print(f"[gather_to_rank] at rank {rank} of {world_size}")
 
     # -- communicate local length
     local_len  = torch.tensor([tensor.shape[dim]], device=tensor.device)

@@ -42,6 +42,7 @@ class BaseTrainerConfig:
     resume_checkpoint:Optional[str]         = None
     run_name:         Optional[str]         = None
     wandb_project:    str                   = "latent-action-models"
+    wandb_enabled:    bool                  = True
 
     # -- optimisation
     lr:              float                  = 1e-4

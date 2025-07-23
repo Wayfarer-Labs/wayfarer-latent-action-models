@@ -30,7 +30,7 @@ val_every: 250
 
 # -- dataset
 data:
-  batch_size: 64                 # keep in sync with trainer batch_size
+  batch_size: 8                 # keep in sync with trainer batch_size
   dataset_name: gta_4
   num_frames: 2
   resolution: 256

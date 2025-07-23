@@ -17,7 +17,8 @@ class BaseTrainer(nn.Module):
         super().__init__()
         rank, world_size, device = init_distributed()
         self.rank, self.world_size, self.device = rank, world_size, device
-        
+
+        self._wandb_enabled = cfg.wandb_enabled
         self.model          = model.to(device)
         self.cfg            = cfg
         self.device         = torch.device(device)
@@ -103,7 +104,7 @@ class BaseTrainer(nn.Module):
 
     @property
     def should_validate(self) -> bool:
-        return self.global_step % self.cfg.val_every == 0 and self.rank == 0
+        return self.global_step % self.cfg.val_every == 0
 
     def amp_ctx(self):
         return torch.amp.autocast(self.device.type) if self.use_amp else nullcontext()
