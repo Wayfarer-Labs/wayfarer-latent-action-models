@@ -56,8 +56,9 @@ class Trainer_LatentActionModel(BaseTrainer):
         latent_action_model = create_latent_action_model(config)
         *_, device = init_distributed()
         super(Trainer_LatentActionModel, self).__init__(latent_action_model, config, device=device)
-        self.beta           = 0.
-        self._wandb_run     = None
+        self.beta               = 0.
+        self._wandb_run         = None
+        self.debug_show_samples = 10
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
 
     @property
@@ -177,9 +178,11 @@ class Trainer_LatentActionModel(BaseTrainer):
         if "iter_sec" in stats:     wandb_dict["perf/iter_sec"]     = stats["iter_sec"]
         if "batch_sec" in stats:    wandb_dict["perf/batch_sec"]    = stats["batch_sec"]
 
-        wandb.log(wandb_dict, step=self.global_step, commit=True)
+        wandb.log(wandb_dict, step=self.global_step, commit=False)
         print(f"[rank {self.rank}] {wandb_dict}")
 
+    def commit_log(self) -> None:
+        if self._wandb_run: wandb.log({}, commit=True)
 
     def train(self)   -> None:
         while self.should_train and (start_time := time.time()):
@@ -194,7 +197,14 @@ class Trainer_LatentActionModel(BaseTrainer):
             if self.should_log:      self.log_step(info)
             if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
             if self.should_validate: self.validate()
-            self.global_step     += 1
+            if bool(self.debug_show_samples) and self.should_log:
+                wandb.log({
+                    f'debug/sample_{self.debug_show_samples}_video': as_wandb_video(video_bnchw, "video"),
+                    f'debug/sample_{self.debug_show_samples}_recon': as_wandb_video(info['reconstructed_frames_bnchw'],"recon"),
+                }, step=self.global_step)
+                self.debug_show_samples -= 1
+            
+            self.global_step     += 1 ; self.commit_log() # -- only commit when all logs are written so we keep global-step monotonic invariant
             print(f"[rank {self.rank}] training step done {self.global_step}")
 
         self.save_checkpoint(self.ckpt_dir / self.save_path)
@@ -262,7 +272,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                     wandb.log({
                         f"UMAP Scatter/{self.global_step}":     scatter,
                         f"Reconstruction/{self.global_step}":   video_table,
-                    },  step=self.global_step, commit=True)
+                    },  step=self.global_step)
 
         print(f"[rank {self.rank}] validation done")
         barrier()

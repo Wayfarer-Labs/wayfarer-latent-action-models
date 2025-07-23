@@ -80,6 +80,16 @@ def create_dataloader(config: DataConfig) -> DataLoader:
 
 
 if __name__ == "__main__":
-    data            = DataConfig()
+    data            = DataConfig().from_dict({
+        "dataset_name": "gta_4",
+        "resolution": 256,
+        "num_frames": 2,
+        "batch_size": 8,
+        "num_threads": 4,
+    })
     dl              = create_dataloader(data)
-    video_bnchw     = next(iter(dl))
+    
+    for _ in range(10):
+        video_bnchw     = next(iter(dl))
+        print(video_bnchw.shape)
+        print(f'checksum: {video_bnchw.sum()}')
