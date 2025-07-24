@@ -258,7 +258,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                 for (x,y), c in zip(umap_embed_n2, cluster_ids_n):
                     umap_table.add_data(x,y, int(c))
 
-                scatter = wandb.plot.scatter(umap_table, "umap_x", "umap_y", title="UMAP Projection of Latent Actions")
+                scatter = wandb.plot.scatter(umap_table, "umap_x", "umap_y", title=f"UMAP step {self.global_step}")
 
                 # -- reconstruction
                 video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
