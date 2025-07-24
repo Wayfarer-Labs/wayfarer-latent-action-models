@@ -1,4 +1,7 @@
 multimethod
+multipledispatch
+plum-dispatch
+overloading
 wandb[media]
 einops
 torch
