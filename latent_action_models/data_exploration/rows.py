@@ -1,20 +1,3 @@
-#!/usr/bin/env python3
-"""gta4_csv_parser.py
-
-Walk the hard‑coded dataset directory `/mnt/data/shahbuland/video-proc-2/datasets/gta_nas`,
-try to parse every line of every `*.csv`, and print per‑file + aggregate
-success/failure stats.
-
-Robustness tweaks (2025‑07‑23):
-  • Strips *all* leading/trailing whitespace before parsing.
-  • Gracefully skips rows whose timestamp column is empty or not a float
-    instead of crashing (counts them as failures so you still see them).
-  • Treats anything whose 3rd col starts with "mouse" (case‑insensitive,
-    spaces allowed) as a mouse row.
-
-Usage:
-    python gta4_csv_parser.py
-"""
 from   __future__ import annotations
 import csv, re, sys, pathlib
 from   collections import namedtuple
@@ -74,8 +57,8 @@ def parse_row(ts: str, col1: str, col2: str) -> ParsedEvent | None:
         dx          = 0,
         dy          = 0,
         wheel       = 0.0,
-        raw         = f"{col1} | {col2}"
-    )
+        raw         = f"{col1} | {col2}")
+
 
 # ── file‑level routine ───────────────────────────────────────────────────
 
