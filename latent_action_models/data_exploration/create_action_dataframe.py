@@ -19,7 +19,7 @@ from latent_action_models.data_exploration.utils        import DATA_ROOT, is_ffm
 from latent_action_models.data_exploration              import cache
 
 starmap             = curry(starmap)
-ENABLE_CACHE        = True
+ENABLE_CACHE        = False
 CACHED_ACTIONS_PATH = Path(first(cache.__path__)) / 'events.jsonl'
 PARQUET_PATH        = Path(first(cache.__path__)) / 'gta_events.parquet'
 FFPROBE_ARGS        = dict( cmd='ffprobe', v='error', select_streams='v:0',

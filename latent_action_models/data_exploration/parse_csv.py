@@ -135,7 +135,7 @@ def process_file(path: Path)        -> Generator[ParsedEvent, None, None]:
 
 
 @curry
-def process_dir (root: Path = DATA_ROOT, *, limit = None)   -> Generator[ParsedEvent, None, None]:
+def process_dir (root: Path, *, limit = None)   -> Generator[ParsedEvent, None, None]:
     yield from pipe(
         root,
         iter_csv,
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     limit       = 1
     total_lines = sum(len(open(f).readlines()) for f in iter_csv(DATA_ROOT))
     print(f'Total lines: {total_lines}')
-    events      = list(process_dir(limit=None))
+    events      = list(process_dir(DATA_ROOT, limit=None))
     bad_events  = [e for e in events if e.exc is not    None]
     print(f'Error rate with limit {limit}: {len(bad_events) / len(events) * 100}%')
     good_events = [e for e in events if e.exc is        None]
