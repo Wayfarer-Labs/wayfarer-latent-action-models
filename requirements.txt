@@ -2,6 +2,7 @@ multimethod
 multipledispatch
 plum-dispatch
 pyarrow
+polars
 overloading
 wandb[media]
 einops

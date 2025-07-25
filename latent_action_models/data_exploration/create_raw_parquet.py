@@ -18,7 +18,7 @@ from latent_action_models.data_exploration.utils        import DATA_ROOT, is_ffm
 from latent_action_models.data_exploration              import cache
 
 starmap             = curry(starmap)
-ENABLE_CACHE        = False
+ENABLE_CACHE        = True
 CACHED_ACTIONS_PATH = Path(first(cache.__path__)) / 'events.jsonl'
 PARQUET_PATH        = Path(first(cache.__path__)) / 'gta_events.parquet'
 FFPROBE_ARGS        = dict( cmd='ffprobe', v='error', select_streams='v:0',
@@ -27,7 +27,7 @@ ROW_PROGRESS_BAR    = tqdm(desc='Reading dataframe rows...')
 
 
 if ENABLE_CACHE:
-    get_actions = lambda _, __: (ParsedEvent(**json.loads(line)) for line in open(CACHED_ACTIONS_PATH, 'r').readlines())
+    get_actions = curry(lambda _, limit: (ParsedEvent(**json.loads(line)) for line in open(CACHED_ACTIONS_PATH, 'r').readlines()))
 
 
 @dataclass
@@ -98,7 +98,7 @@ def to_parquet(rows: Iterable[DataframeRow], out_path: Path,
     _rows   = list(asdict(row) for row in rows)
 
     print(f'Creating dataframe...')
-    df      = json_normalize(_rows, sep='.')
+    df      = json_normalize(_rows, separator='.')
     
     df.to_parquet(
         out_path,
@@ -112,4 +112,4 @@ def to_parquet(rows: Iterable[DataframeRow], out_path: Path,
 
 
 if __name__ == "__main__":
-    to_parquet(get_dataframe_rows(file_limit=2), out_path=PARQUET_PATH)
+    to_parquet(get_dataframe_rows(file_limit=None), out_path=PARQUET_PATH)
