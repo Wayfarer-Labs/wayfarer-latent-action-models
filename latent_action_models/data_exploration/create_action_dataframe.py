@@ -83,10 +83,10 @@ class DataframeRow:
     action_data:    ParsedEvent
 
 
-def get_dataframe_rows(root: Path = DATA_ROOT) -> Generator[DataframeRow, None, None]:
+def get_dataframe_rows(root: Path = DATA_ROOT, *, file_limit=None) -> Generator[DataframeRow, None, None]:
     yield from pipe(
         root,
-        get_actions,                        # generates ParsedEvents
+        get_actions(limit=file_limit),      # generates ParsedEvents
         map(juxt(process_video, identity)), # yields tuples of ParsedEvent, VideoMetadata
         starmap(DataframeRow)               # yields DataframeRow 
     )
@@ -111,5 +111,6 @@ def to_parquet(rows: Iterable[DataframeRow], out_path: Path,
     return df
 
 
+
 if __name__ == "__main__":
-    to_parquet(get_dataframe_rows(), out_path=PARQUET_PATH)
+    to_parquet(get_dataframe_rows(file_limit=2), out_path=PARQUET_PATH)

@@ -7,7 +7,7 @@ from    pathlib         import Path
 from    multimethod     import multimethod
 from    typing          import Literal, Optional, Generator
 from    dataclasses     import dataclass, field, asdict
-from    toolz           import pipe, last, identity
+from    toolz           import curry, pipe, last, identity
 from    toolz.curried   import mapcat, take
 
 from    latent_action_models.data_exploration.utils import (
@@ -134,7 +134,8 @@ def process_file(path: Path)        -> Generator[ParsedEvent, None, None]:
         FILE_PROGRESS_BAR.update(1)
 
 
-def process_dir (root: Path = DATA_ROOT, limit = None)   -> Generator[ParsedEvent, None, None]:
+@curry
+def process_dir (root: Path = DATA_ROOT, *, limit = None)   -> Generator[ParsedEvent, None, None]:
     yield from pipe(
         root,
         iter_csv,

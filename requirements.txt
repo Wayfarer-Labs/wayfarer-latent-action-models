@@ -1,6 +1,7 @@
 multimethod
 multipledispatch
 plum-dispatch
+pyarrow
 overloading
 wandb[media]
 einops
