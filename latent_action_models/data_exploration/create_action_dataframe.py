@@ -64,7 +64,7 @@ def process_video(video_path: Path) -> VideoMetadata:
         
         metadata.fps    = fps
         metadata.codec  = streams['codec_name']
-        metadata.start, = 0
+        metadata.start  = 0
         metadata.end    = num_frames
 
     except:     exc = traceback.format_exc()
@@ -103,9 +103,9 @@ def to_parquet(rows: Iterable[DataframeRow], out_path: Path,
     
     df.to_parquet(
         out_path,
-        engine='pyarrow',
-        compression=compression,
-        index=False
+        engine      = 'pyarrow',
+        compression = compression,
+        index       = False
     )
     
     return df
