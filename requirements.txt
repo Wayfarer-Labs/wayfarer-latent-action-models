@@ -3,6 +3,7 @@ multipledispatch
 plum-dispatch
 pyarrow
 polars
+ipykernel
 overloading
 wandb[media]
 einops

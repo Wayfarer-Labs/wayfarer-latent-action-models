@@ -16,7 +16,6 @@ def resolve(df: pl.DataFrame, prefix: str, field: str, sep: str = '.') -> pl.Exp
     if prefix in df.columns and isinstance(df.schema[prefix], pl.Struct):   return pl.col(prefix).struct.field(field)                # real struct
     raise KeyError(f"cannot find {prefix}.{field}")
 
-
 def flatten(df: pl.DataFrame) -> pl.DataFrame:
     """Project out the handful of columns we care about and drop the rest."""
     mapping = [
@@ -78,8 +77,8 @@ def aggregate_frames(sub: pl.DataFrame, video: str, spf: float, keys: list[str])
                *[pl.col(k).last() for k in keys],
            ])
            .with_columns([
-               pl.lit(video)                                       .alias("video_path"),
-               (pl.col("frame_idx") * spf + sub["vid_start"][0]) .alias("t_sec"),
+               pl.lit(video).alias("video_path"),
+               (pl.col("frame_idx") * spf + sub["vid_start"][0]).alias("t_sec"),
            ])
     )
 
