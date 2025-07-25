@@ -11,12 +11,9 @@ RAW_PARQUET  = Path(first(cache.__path__)) / "gta_events.parquet"
 OUT_PARQUET  = Path(first(cache.__path__)) / "gta_frames.parquet"
 
 
-def resolve(df: pl.DataFrame, prefix: str, field: str) -> pl.Expr:
-    flat_name = f"{prefix}_{field}"
-    if flat_name in df.columns:                                   # flattened
-        return pl.col(flat_name)
-    if prefix in df.columns and isinstance(df.schema[prefix], pl.Struct):
-        return pl.col(prefix).struct.field(field)                # real struct
+def resolve(df: pl.DataFrame, prefix: str, field: str, sep: str = '.') -> pl.Expr:
+    if (flat_name := f"{prefix}{sep}{field}") in df.columns:                return pl.col(flat_name)
+    if prefix in df.columns and isinstance(df.schema[prefix], pl.Struct):   return pl.col(prefix).struct.field(field)                # real struct
     raise KeyError(f"cannot find {prefix}.{field}")
 
 
@@ -122,4 +119,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from latent_action_models.data_exploration.create_raw_parquet import to_parquet, get_dataframe_rows
+
+    # to_parquet(get_dataframe_rows(file_limit=None), out_path=RAW_PARQUET)
+
     main()

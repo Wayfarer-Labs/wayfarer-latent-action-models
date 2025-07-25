@@ -4,8 +4,8 @@ import  pyarrow
 import  traceback
 from    itertools       import starmap
 from    typing          import Optional, Generator, Iterable
-import  polars          as pl
-from    polars          import json_normalize
+import  pandas          as pd
+from    pandas          import json_normalize
 from    tqdm            import tqdm
 from    multimethod     import multimethod
 from    toolz           import first, memoize, juxt, identity, pipe, curry
@@ -93,12 +93,12 @@ def get_dataframe_rows(root: Path = DATA_ROOT, *, file_limit=None) -> Generator[
 
 def to_parquet(rows: Iterable[DataframeRow], out_path: Path,
                *,
-               compression: str = "snappy") -> pl.DataFrame:
+               compression: str = "snappy") -> pd.DataFrame:
     print(f'Materializing...')
     _rows   = list(asdict(row) for row in rows)
 
     print(f'Creating dataframe...')
-    df      = json_normalize(_rows, separator='.')
+    df      = json_normalize(_rows, sep='.')
     
     df.to_parquet(
         out_path,
