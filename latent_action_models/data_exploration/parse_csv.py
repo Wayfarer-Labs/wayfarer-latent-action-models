@@ -1,32 +1,34 @@
+from __future__ import annotations
+
 import  traceback
+import  json
 from    tqdm            import tqdm
 from    pathlib         import Path
-from    multimethod     import multimethod, parametric
+from    multimethod     import multimethod
 from    typing          import Literal, Optional, Generator
-from    dataclasses     import dataclass, field
+from    dataclasses     import dataclass, field, asdict
 from    toolz           import pipe, last, identity
 from    toolz.curried   import mapcat, take
 
 from    latent_action_models.data_exploration.utils import (
-    iter_csv, is_keypress,
-    is_mouse_delta, _first_member
+    iter_csv, _first_member,
+    MouseDeltaRow, KeypressRow
 )
 
-DATA_ROOT               = Path("/mnt/data/shahbuland/video-proc-2/datasets/gta_nas")
-FILE_PROGRESS_BAR       = tqdm(desc='Processing files...')
-LINE_PROGRESS_BAR       = tqdm(desc='Processing lines...')
+DATA_ROOT         = Path("/mnt/data/shahbuland/video-proc-2/datasets/gta_nas")
+FILE_PROGRESS_BAR = tqdm(desc='Processing files...')
+LINE_PROGRESS_BAR = tqdm(desc='Processing lines...')
 
 
-
-@dataclass()
+@dataclass
 class RowContext:
-    origin_csv:     str
-    origin_vid:     str
-    lineno:         int
-    raw_row:        str
+    origin_csv:         str
+    origin_vid:         str
+    lineno:             int
+    raw_row:            str
 
 
-@dataclass()
+@dataclass
 class ParsedEvent:
     origin_csv:         str
     origin_vid:         str
@@ -45,12 +47,6 @@ class ParsedEvent:
 
 
 
-MouseDeltaRow   = parametric(str, is_mouse_delta)
-KeypressRow     = parametric(str, is_keypress)
-
-
-
-
 def file_context(context: RowContext) -> ParsedEvent:
     return ParsedEvent( origin_csv  = context.origin_csv,
                         origin_vid  = context.origin_vid,
@@ -59,6 +55,8 @@ def file_context(context: RowContext) -> ParsedEvent:
                         exc         = exc   if (exc := traceback.format_exc()) != 'NoneType: None\n'
                                             else None)
 
+def _preprocess_raw (raw_row: str) -> str:
+    return raw_row.strip().lower()
 
 @multimethod
 def _parse_row(raw_row: str, context: RowContext) -> ParsedEvent:
@@ -109,8 +107,6 @@ def _parse_row(raw_row: KeypressRow, context: RowContext) -> ParsedEvent:
     return event
 
 
-def _preprocess_raw (raw_row: str)  -> str: return raw_row.strip().lower()
-
 def process_file(path: Path)        -> Generator[ParsedEvent, None, None]:
     with open(path, 'r') as f:
         FILE_PROGRESS_BAR.set_description(
@@ -118,30 +114,48 @@ def process_file(path: Path)        -> Generator[ParsedEvent, None, None]:
         f.seek(0)
         
         for i, line in enumerate(f):
+
+            if line in ('', '\n'): continue
+
             context = RowContext(
                 origin_csv  = str(path),
-                origin_vid  = str(path.with_suffix('.mkv')),
+                origin_vid  = str(vid_path := path.with_suffix('.mkv')),
                 lineno      = i,
                 raw_row     = line
             )
+
+            if not vid_path.exists(): continue
+
             try:    yield _parse_row(_preprocess_raw(line), context)
             except: yield file_context(context)
+
             LINE_PROGRESS_BAR.update(1)
 
         FILE_PROGRESS_BAR.update(1)
 
+
 def process_dir (root: Path = DATA_ROOT, limit = None)   -> Generator[ParsedEvent, None, None]:
     yield from pipe(
         root,
-        take(limit) if limit else identity,
         iter_csv,
+        take(limit) if limit else identity,
         mapcat(process_file)
     )
 
+
 if __name__ == "__main__":
     limit       = 1
-    events      = list(process_dir(limit=limit))
+    total_lines = sum(len(open(f).readlines()) for f in iter_csv(DATA_ROOT))
+    print(f'Total lines: {total_lines}')
+    events      = list(process_dir(limit=None))
     bad_events  = [e for e in events if e.exc is not    None]
     print(f'Error rate with limit {limit}: {len(bad_events) / len(events) * 100}%')
     good_events = [e for e in events if e.exc is        None]
-    pass
+
+    with open('events.jsonl', 'w+') as f:
+        for e in good_events:
+            f.write(json.dumps(asdict(e)) + '\n')
+
+    with open('bad_events.jsonl', 'w+') as f:
+        for e in bad_events:
+            f.write(json.dumps(asdict(e)) + '\n')
