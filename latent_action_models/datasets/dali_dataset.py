@@ -8,7 +8,7 @@ import nvidia.dali.types        as types
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 from nvidia.dali.pipeline       import pipeline_def
 
-from latent_action_models.data.clip_metadata_generator import ClipEntry
+from latent_action_models.datasets.clip_metadata_generator import ClipEntry
 
 
 @pipeline_def

@@ -28,7 +28,7 @@ ROW_PROGRESS_BAR    = tqdm(desc='Reading dataframe rows...')
 
 
 if ENABLE_CACHE:
-    get_actions = lambda _: (ParsedEvent(**json.loads(line)) for line in open(CACHED_ACTIONS_PATH, 'r').readlines())
+    get_actions = lambda _, __: (ParsedEvent(**json.loads(line)) for line in open(CACHED_ACTIONS_PATH, 'r').readlines())
 
 
 @dataclass
