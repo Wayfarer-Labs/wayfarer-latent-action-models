@@ -4,13 +4,12 @@ import  torch
 from    pathlib                         import Path
 from    typing                          import Literal
 from    torch                           import Tensor
-from torch.types import Device
 from    torch.utils.data                import Dataset, DataLoader
 
-from    latent_action_models.configs                         import DataConfig
-from    latent_action_models.data.dali_dataset               import DALI_VideoDataset, create_dali_video_dataset
-from    latent_action_models.data.clip_metadata_generator    import _dataset_clips, ClipEntry
-from    latent_action_models.utils                           import init_distributed
+from    latent_action_models.configs                            import DataConfig
+from    latent_action_models.datasets.dali_dataset              import DALI_VideoDataset, create_dali_video_dataset
+from    latent_action_models.datasets.clip_metadata_generator   import _dataset_clips, ClipEntry
+from    latent_action_models.utils                              import init_distributed
 
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'data' / 'indices' 
 
