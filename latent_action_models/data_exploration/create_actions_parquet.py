@@ -18,7 +18,7 @@ OUT_PARQUET_SCHEMA  = {
 FINAL_COLUMN_ORDER = list(OUT_PARQUET_SCHEMA.keys())
 
 ALLOWED_KEYS   = {"w", "a", "s", "d", "mouse1", "mouse2", "shift"}
-JUNK_PATTERNS  = ("pos_x:", "wheelmouse")
+# JUNK_PATTERNS  = ("pos_x:", "wheelmouse")
 KEY_PREFIX     = "keypress_"
 DEFAULT_FPS    = 29.97
 
@@ -35,7 +35,7 @@ def resolve(df: pl.DataFrame, prefix: str, field: str) -> pl.Expr:
 
 
 def flatten_events(df: pl.DataFrame) -> pl.DataFrame:
-    # This function is fine as-is
+    # This function is mostly the same as before.
     mapping = [
         ("video_metadata", "video_path",      "video_path"),
         ("video_metadata", "start",           "vid_start"),
@@ -45,14 +45,19 @@ def flatten_events(df: pl.DataFrame) -> pl.DataFrame:
         ("action_data",    "dy",              "dy"),
         ("action_data",    "wheel",           "wheel"),
         ("action_data",    "keys_active",     "keys_active"),
+        # We don't really need these two anymore, but it's safe to leave them
         ("action_data",    "key_pressed",     "key_pressed"),
         ("action_data",    "key_pressed_dir", "key_pressed_dir"),
     ]
-    # Filter out junk patterns if they exist in the raw data
-    df = df.filter(~resolve(df, "action_data", "key_pressed").str.contains("|".join(JUNK_PATTERNS)))
+    
+    # The problematic filter line has been REMOVED from here.
+    
     cols  = [resolve(df, s, f).alias(n) for s, f, n in mapping]
     drops = [c for c in df.columns if c.startswith("video_metadata") or c.startswith("action_data")]
+    
     flat_df = df.with_columns(cols).select(pl.exclude(drops))
+
+    # Normalize the keys_active list to be all lowercase.
     return flat_df.with_columns(
         pl.col("keys_active").list.eval(pl.element().str.to_lowercase())
     )
