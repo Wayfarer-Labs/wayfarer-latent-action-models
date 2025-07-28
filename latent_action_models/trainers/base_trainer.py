@@ -5,9 +5,9 @@ from torch.optim       import AdamW
 from torch.nn          import utils
 from torch             import nn, Tensor
 
-from latent_action_models.configs           import BaseTrainerConfig
-from latent_action_models.utils             import init_distributed
-from latent_action_models.data.dataloaders  import create_dataloader
+from latent_action_models.configs               import BaseTrainerConfig
+from latent_action_models.utils                 import init_distributed
+from latent_action_models.datasets.dataloaders  import create_dataloader
 
 CKPT_DIR = 'checkpoints/' # global cause im very cool and special
 

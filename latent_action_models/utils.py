@@ -178,17 +178,21 @@ def colors_labels_from_actions(
     # ... (code to find common_labels_list is the same as before) ...
     keypress_cols = sorted([c for c in full_actions_df.columns if c.startswith('keypress_')])
     keypress_combo_expr = pl.concat_str(
-        [pl.when(pl.col(c) == 1).then(pl.lit(c.replace('keypress_', '') + "+")) for c in keypress_cols]
+        [
+            pl  .when(pl.col(c) == 1)\
+                .then(pl.lit(c.replace('keypress_', '') + "+"))\
+                .otherwise(pl.lit(""))
+            for c in keypress_cols
+        ]
     ).str.strip_suffix('+').alias("keypress_combo")
 
     common_labels_list = (
         full_actions_df.with_columns(keypress_combo_expr)
                        .filter(pl.col("keypress_combo") != "")
                        .group_by("keypress_combo").len()
-                       .sort("count", descending=True)
+                       .sort("len", descending=True)
                        .head(top_n_common)
-                       .get_column("keypress_combo").to_list()
-    )
+                       .get_column("keypress_combo").to_list())
     
     # --- Step 3 (Create Legend Map) is unchanged ---
     legend_map = { "OTHER": GRAY, "IDLE": IDLE_COLOR, "NO_ACTION": NO_ACTION_COLOR }

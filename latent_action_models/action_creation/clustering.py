@@ -52,7 +52,7 @@ def umap_visualization(
                 ax.scatter(
                     embedding_n2[indices, 0],
                     embedding_n2[indices, 1],
-                    s=5,
+                    s=8,
                     alpha=0.7,
                     linewidths=0,
                     color=np.array(color_rgb) / 255.0,

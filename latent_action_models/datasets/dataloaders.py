@@ -11,7 +11,7 @@ from    latent_action_models.datasets.clip_metadata_generator   import _dataset_
 from    latent_action_models.utils                              import init_distributed
 from    latent_action_models.datasets.decord_dataset            import DecordVideoDataset
 
-CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'data' / 'indices' 
+CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' 
 
 class RandomDataset(Dataset):
     def __init__(self, config: DataConfig) -> None:
