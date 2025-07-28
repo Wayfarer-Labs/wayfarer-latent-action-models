@@ -7,9 +7,9 @@ from    torch                           import Tensor
 from    torch.utils.data                import Dataset, DataLoader
 
 from    latent_action_models.configs                            import DataConfig
-from    latent_action_models.datasets.dali_dataset              import DALI_VideoDataset, create_dali_video_dataset
 from    latent_action_models.datasets.clip_metadata_generator   import _dataset_clips, ClipEntry
 from    latent_action_models.utils                              import init_distributed
+from    latent_action_models.datasets.decord_dataset            import DecordVideoDataset
 
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'data' / 'indices' 
 
@@ -18,7 +18,6 @@ class RandomDataset(Dataset):
         super().__init__()
         self.config     = config
         self.height     = self.width = config.resolution
-        self.format     = config.output_format
         self.n_frames   = config.num_frames
 
     def __len__(self):
@@ -43,13 +42,7 @@ def _dataset(dataset: Literal["gta_4"], config: DataConfig, rank: int = 0, world
         clips   = [ClipEntry(**json.loads(line)) for line in open(CLIPS_BASE_DIR / 'gta4_clips.jsonl').readlines()]
     else: clips = _dataset_clips(dataset)
 
-    return create_dali_video_dataset(clips, keep_codec='h264',
-                                     resolution=config.resolution,
-                                     num_frames=config.num_frames,
-                                     batch_size=config.batch_size,
-                                     num_threads=config.num_threads,
-                                     rank=rank,
-                                     world=world)
+    return DecordVideoDataset(clips, resolution=config.resolution, num_frames=config.num_frames)
 
 
 @multimethod
@@ -58,24 +51,14 @@ def _dataset(dataset: Literal["call_of_duty"], config: DataConfig, rank: int = 0
         clips   = [ClipEntry(**json.loads(line)) for line in open(CLIPS_BASE_DIR / 'cod_clips.jsonl').readlines()]
     else: clips = _dataset_clips(dataset)
 
-    return create_dali_video_dataset(clips, keep_codec='h264',
-                                     resolution=config.resolution,
-                                     num_frames=config.num_frames,
-                                     batch_size=config.batch_size,
-                                     num_threads=config.num_threads,
-                                     rank=rank,
-                                     world=world)
+    return DecordVideoDataset(clips, resolution=config.resolution, num_frames=config.num_frames)
+
 
 def create_dataloader(config: DataConfig) -> DataLoader:
     rank, world, _  = init_distributed()
     dataset         = _dataset(config.dataset_name, config, rank, world)
 
-    if isinstance(dataset, DALI_VideoDataset):
-        return DataLoader(dataset,
-                          batch_size=None)
-    else:
-        return DataLoader(dataset,
-                          batch_size=config.batch_size)
+    return DataLoader(dataset, batch_size=config.batch_size)
 
 
 if __name__ == "__main__":

@@ -121,6 +121,6 @@ def _from_file(path: Path) -> list[ClipEntry]:
 
 if __name__ == "__main__":
     gta_clips = _dataset_clips('gta_4')
-    _to_file(Path.cwd() / 'latent_action_models' / 'data' / 'indices' / 'gta4_clips.jsonl', gta_clips)
+    _to_file(Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' / 'gta4_clips.jsonl', gta_clips)
     cod_clips = _dataset_clips('call_of_duty')
-    _to_file(Path.cwd() / 'latent_action_models' / 'data' / 'indices' / 'cod_clips.jsonl',  cod_clips)
+    _to_file(Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' / 'cod_clips.jsonl',  cod_clips)

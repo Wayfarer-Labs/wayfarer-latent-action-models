@@ -1,12 +1,16 @@
 import  os
+import  random
 import  wandb
 import  torch
+import  colorsys
 import  einops as eo
+import  pandas as pd, polars as pl
 from    datetime            import timedelta
 from    typing              import Literal, Optional
 from    torch               import Tensor
 import  torch.distributed   as dist
-
+from    itertools           import product as cartesian_product
+from    toolz.itertoolz     import take, random_sample
 # reused from adaworld repo 
 
 def patchify(videos_bnchw: Tensor, size: int) -> Tensor:
@@ -127,3 +131,93 @@ def gather_to_rank(tensor:  Tensor,
         shards.append(chunk[tuple(slc)])
 
     return torch.cat(shards, dim=dim) if cat else shards
+
+GRAY = (128, 128, 128)
+IDLE_COLOR = (220, 220, 220)
+_PALETTE    = (10, 35, 65, 125, 165, 225)
+
+
+def _sample_colors( n_colors: int = 8, *,
+                    seed: int | None = None,
+                    palette: tuple[int, ...] = _PALETTE) -> list[tuple[int, int, int]]:
+
+    total       = len(palette)**3
+    assert n_colors <= total, f'{n_colors} > {total} non-unique colors.'
+
+    rng     = random.Random(seed)
+    cube    = list(cartesian_product(palette, repeat=3))
+    sample  = take(n_colors, random_sample(n_colors / total, cube, random_state=rng))
+    picked  = list(sample)
+
+    if len(picked) < n_colors:
+        remainder = rng.sample(list(cube), n_colors - len(picked))
+        picked.extend(remainder)
+
+    rng.shuffle(picked) ; return picked
+
+
+def colors_labels_from_actions(
+    actions_batch: list[pl.DataFrame | Literal['NO_ACTION']],
+    full_actions_df: pl.DataFrame,
+    num_frames_per_clip: int,
+    *,
+    top_n_common: int = 8
+) -> tuple[
+        list[tuple[int, int, int]],     # colors
+        list[str],                      # labels
+        dict[str, tuple[int, int, int]] # legend
+    ]:
+    """
+    Analyzes actions and generates RGB colors, string labels, and a legend map.
+    """
+    # --- Steps 1 and 2 (Analysis) are unchanged ---
+    GRAY = (128, 128, 128)
+    IDLE_COLOR = (220, 220, 220)
+    NO_ACTION_COLOR = (0, 0, 0)
+    
+    # ... (code to find common_labels_list is the same as before) ...
+    keypress_cols = sorted([c for c in full_actions_df.columns if c.startswith('keypress_')])
+    keypress_combo_expr = pl.concat_str(
+        [pl.when(pl.col(c) == 1).then(pl.lit(c.replace('keypress_', '') + "+")) for c in keypress_cols]
+    ).str.strip_suffix('+').alias("keypress_combo")
+
+    common_labels_list = (
+        full_actions_df.with_columns(keypress_combo_expr)
+                       .filter(pl.col("keypress_combo") != "")
+                       .group_by("keypress_combo").len()
+                       .sort("count", descending=True)
+                       .head(top_n_common)
+                       .get_column("keypress_combo").to_list()
+    )
+    
+    # --- Step 3 (Create Legend Map) is unchanged ---
+    legend_map = { "OTHER": GRAY, "IDLE": IDLE_COLOR, "NO_ACTION": NO_ACTION_COLOR }
+    # ... (code to populate legend_map with distinct colors is the same as before) ...
+    distinct_colors = _sample_colors(len(common_labels_list))
+    for label, color in zip(common_labels_list, distinct_colors):
+        legend_map[label.upper()] = color
+        
+    # --- Step 4: Process Batch and Generate Colors AND Labels ---
+    output_colors = []
+    output_labels = []
+
+    for clip_data in actions_batch:
+        if isinstance(clip_data, pl.DataFrame):
+            clip_with_labels = clip_data.with_columns(keypress_combo_expr)
+            for row in clip_with_labels.to_dicts():
+                combo = row['keypress_combo']
+                if combo in common_labels_list: label = combo.upper()
+                elif combo == "":               label = "IDLE"
+                else:                           label = "OTHER"
+                
+                output_labels.append(label)             # Add the string label
+                output_colors.append(legend_map[label]) # Add the corresponding color
+        else:
+            output_labels.extend(["NO_ACTION"]      * num_frames_per_clip)
+            output_colors.extend([NO_ACTION_COLOR]  * num_frames_per_clip)
+            
+    return (
+        output_colors,
+        output_labels,
+        legend_map
+    )

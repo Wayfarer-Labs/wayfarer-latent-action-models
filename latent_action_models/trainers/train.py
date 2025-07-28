@@ -1,14 +1,17 @@
 import  os
 import  piq
 import  time
+from    pathlib import Path
+from    functools import cache
+import  pandas as pd, polars as pl
 import  torch
 import  wandb
 import  random
 import  pathlib
-import traceback
+import  traceback
 import  dataclasses
 import  einops as eo
-from    typing      import TypedDict, NotRequired
+from    typing      import TypedDict, NotRequired, Optional
 from    torch.types import Number
 from    torch       import Tensor
 import  torch.nn.functional as F
@@ -17,7 +20,8 @@ from latent_action_models.models.latent_action_model    import ActionEncodingInf
 from latent_action_models.configs                       import LatentActionModelTrainingConfig
 from latent_action_models.trainers.base_trainer         import BaseTrainer
 from latent_action_models.action_creation.clustering    import umap_visualization
-from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, init_distributed
+from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, init_distributed, colors_labels_from_actions
+from latent_action_models.data_exploration              import create_actions_parquet as lam_parquet
 
 
 class LogStats(TypedDict):
@@ -99,14 +103,14 @@ class Trainer_LatentActionModel(BaseTrainer):
         print(f"[rank-{self.rank}] checkpoint saved to {path}")
 
 
-    def format_batch(self) -> Tensor:
-        try:    video_bnchw = next(self.iter_loader)
+    def format_batch(self) -> tuple[Tensor, list[str], Tensor]:
+        try:    video_bnchw, video_paths, start_frame_b = next(self.iter_loader)
         except  StopIteration: self.iter_loader = iter(self.dataloader) ; return self.format_batch()
         except  Exception as e:
             print(f"[rank {self.rank}] error in format_batch: {e}") ; traceback.print_exc()
             return self.format_batch()
 
-        return  video_bnchw
+        return  video_bnchw, video_paths, start_frame_b
 
 
     def train_step(self, video_bnchw: Tensor) -> LogStats:
@@ -188,7 +192,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         while self.should_train and (start_time := time.time()):
             barrier()
             print(f"[rank {self.rank}] training step {self.global_step}")
-            video_bnchw: Tensor   =  self.format_batch()          ; batch_time   = time.time() - start_time
+            video_bnchw, *_       =  self.format_batch()          ; batch_time   = time.time() - start_time
             info:        LogStats =  self.train_step(video_bnchw) ; iter_time    = time.time() - start_time
             print(f"[rank {self.rank}] batch dims {video_bnchw.shape} - batch time {batch_time} train time {iter_time} - batch checksum {video_bnchw.sum()}")
             info['iter_sec']      =  iter_time / self.batch_size
@@ -214,19 +218,29 @@ class Trainer_LatentActionModel(BaseTrainer):
     def validate(self) -> None:
         # we assume we are going to have more umap samples than reconstruction samples (of course)
         model: LatentActionModel    = self._model_unwrapped()
+        parquet: pl.DataFrame|None  = pl.read_parquet(lam_parquet.OUT_PARQUET) if self.cfg.data_config.dataset_name == 'gta_4' else None
         num_samples_umap            = self.cfg.val_num_samples_umap
         num_samples_recon           = self.cfg.val_num_samples_recon
+
         # -- umap visualization
         num_processed_umap_samples  = 0 ; _more_umap  = lambda: num_processed_umap_samples  < num_samples_umap
         num_processed_recon_samples = 0 ; _more_recon = lambda: num_processed_recon_samples < num_samples_recon
         latent_actions_list_bn1d    = []
+        groundtruth_actions_list    = []
         recon_videos_list_bnchw     = []
 
         while _more_umap() or _more_recon():
-            video_bnchw: Tensor                         = self  .format_batch()
+            video_bnchw, paths, idx_start_b             = self  .format_batch()
             if _more_umap():
                 action_info: ActionEncodingInfo         = model .encode_to_actions(video_bnchw)
                 latent_actions_list_bn1d               += [action_info['mean_bn1d']]
+                groundtruth_actions_list               += [
+                    parquet.filter( (pl.col('video_path')   == p)  &
+                                    (pl.col('frame_idx')    >= i)) &
+                                    (pl.col('frame_idx')    <  i + action_info['mean_bn1d'].shape[1])
+                    if      parquet is not None else 'NO_ACTION'
+                    for     p,i in zip(paths, idx_start_b)
+                ]
                 num_umap_samples_in_batch               = action_info['mean_bn1d'].shape[0] * action_info['mean_bn1d'].shape[1]
                 num_processed_umap_samples             += num_umap_samples_in_batch
             
@@ -252,13 +266,17 @@ class Trainer_LatentActionModel(BaseTrainer):
 
             if self.rank == 0:
                 # -- umap
-                umap_table                      = wandb.Table(columns=['umap_x', 'umap_y', 'cluster'])
-                umap_embed_n2, cluster_ids_n    = umap_visualization(latent_actions_n1d, vis_filename=f'umap_visualization_{self.save_path}'.replace('.pt', ''))
+                umap_table                      = wandb.Table(columns=['umap_x', 'umap_y', 'action_label'])
+                colors, labels, legend          = colors_labels_from_actions(groundtruth_actions_list, parquet)
+                umap_embed_n2, fig              = umap_visualization(latent_actions_n1d,
+                                                                     colors=colors,
+                                                                     legend=legend,
+                                                                     vis_filename=f'umap_visualization_{self.save_path}'.replace('.pt', ''))
 
-                for (x,y), c in zip(umap_embed_n2, cluster_ids_n):
-                    umap_table.add_data(x,y, int(c))
+                for (x,y), label in zip(umap_embed_n2, labels):
+                    umap_table.add_data(x,y, label)
 
-                scatter = wandb.plot.scatter(umap_table, "umap_x", "umap_y", title=f"UMAP step {self.global_step}")
+                scatter = wandb.plot.scatter(umap_table, "umap_x", "umap_y", color='action_label', title=f"UMAP step {self.global_step}")
 
                 # -- reconstruction
                 video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
@@ -270,8 +288,9 @@ class Trainer_LatentActionModel(BaseTrainer):
                 if self._wandb_run:
                     print(f"[rank {self.rank}] logging to wandb")
                     wandb.log({
-                        f"UMAP Scatter/{self.global_step}":     scatter,
-                        f"Reconstruction/{self.global_step}":   video_table,
+                        f"UMAP Plot (Interactive)/{self.global_step}":  scatter,
+                        f"UMAP Plot (Static)/{self.global_step}":       fig,
+                        f"Reconstruction/{self.global_step}":           video_table,
                     },  step=self.global_step)
 
         print(f"[rank {self.rank}] validation done")

@@ -14,7 +14,7 @@ from latent_action_models.datasets.clip_metadata_generator import ClipEntry
 @pipeline_def
 def _dali_pipe(filenames: Sequence[str], *, num_frames: int, stride: int, resize: int, shard_id: int, num_shards: int):
     """Internal DALI pipeline definition (one per GPU)."""
-    videos = fn.readers.video(
+    videos, video_idx, start_frame = fn.readers.video(
         device="gpu",  # GPU decode only
         filenames=filenames,
         sequence_length=num_frames,
@@ -23,8 +23,10 @@ def _dali_pipe(filenames: Sequence[str], *, num_frames: int, stride: int, resize
         skip_vfr_check=True,
         shard_id=shard_id,
         num_shards=num_shards,
-        dtype=types.DALIDataType.FLOAT,
-    )
+        enable_timestamps=True,
+        enable_frame_num=True,
+        dtype=types.DALIDataType.FLOAT)
+    
     videos = fn.resize(videos, resize_x=resize, resize_y=resize)
     videos = videos / 255.0
     videos = fn.transpose(videos, perm=[0, 3, 1, 2])  # F,C,H,W
@@ -109,3 +111,11 @@ def create_dali_video_dataset(clips: list[ClipEntry], *, keep_codec: str = "h264
     if not kept: raise ValueError(f"No clips left after filtering for codec '{keep_codec}' - counts: {counts}")
 
     return DALI_VideoDataset(kept, **ds_kwargs)
+
+if __name__ == "__main__":
+    from pathlib import Path
+    from latent_action_models.datasets.clip_metadata_generator import _dataset_clips, _from_file, _to_file
+    # gtaclips = _dataset_clips('gta_4')
+    clips = _from_file(Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' / 'gta4_clips.jsonl')
+    ds = create_dali_video_dataset(clips)
+    next(ds)

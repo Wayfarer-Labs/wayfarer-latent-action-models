@@ -17,74 +17,53 @@ The results in Table 7 demonstrate that the control options derived with AdaWorl
 and exhibit comparable controllability to the discrete counterpart, while the latter
 does not support a customizable number of actions, as it is fixed once trained.
 """
-import  os
-import  random
 import  umap
 import  torch
-from    itertools           import product as cartesian_product
-from    toolz.itertoolz     import take, random_sample
-from    typing              import Iterable
+
 import  numpy               as np
 from    torch               import Tensor
 from    pathlib             import Path
 import  matplotlib.pyplot   as plt
 from    kmeans_pytorch      import kmeans
+from    latent_action_models.utils import _sample_colors
 
 
-_PALETTE    = (10, 35, 65, 125, 165, 225)
-
-
-def _sample_colors( n_colors: int = 8, *,
-                    seed: int | None = None,
-                    palette: tuple[int, ...] = _PALETTE) -> list[tuple[int, int, int]]:
-
-    total       = len(palette)**3
-    assert n_colors <= total, f'{n_colors} > {total} non-unique colors.'
-
-    rng     = random.Random(seed)
-    cube    = list(cartesian_product(palette, repeat=3))
-    sample  = take(n_colors, random_sample(n_colors / total, cube, random_state=rng))
-    picked  = list(sample)
-
-    if len(picked) < n_colors:
-        remainder = rng.sample(list(cube), n_colors - len(picked))
-        picked.extend(remainder)
-
-    rng.shuffle(picked) ; return picked
-
-
-def umap_visualization(latent_actions_mu_n1d:   Tensor,
-                        cluster_ids_n:           Tensor | None = None,
-                        *, 
-                        vis_filename:            str = 'umap_visualization.png',
-                        vis_dir:                 Path = Path('visualizations/'),) -> tuple[np.ndarray, np.ndarray]:
+def umap_visualization(
+    latent_actions_mu_n1d: Tensor,
+    *,
+    colors: list[tuple[int, int, int]] | None = None,
+    legend: dict[str, tuple[int, int, int]] | None = None, # MODIFIED: Add legend argument
+    vis_filename: str = 'umap_visualization.png',
+    vis_dir: Path = Path('visualizations/'),
+) -> tuple[np.ndarray, plt.Figure]:
     
-    if cluster_ids_n is None: cluster_ids_n = torch.zeros(latent_actions_mu_n1d.shape[0], dtype=torch.long)
-    latent_np: np.ndarray                   = latent_actions_mu_n1d.squeeze(1).detach().cpu().numpy()
+    latent_np: np.ndarray = latent_actions_mu_n1d.squeeze(1).detach().cpu().numpy()
+    reducer = umap.UMAP(n_neighbors=30, min_dist=0.10, metric="euclidean", verbose=False)
+    embedding_n2: np.ndarray = reducer.fit_transform(latent_np)
 
-    reducer = umap.UMAP(
-        n_neighbors=30,
-        min_dist=0.10,
-        metric="euclidean",
-        verbose=False,
-    )
-    embedding_n2: np.ndarray = reducer.fit_transform(latent_np)   # shape (N, 2)
+    fig, ax = plt.subplots(figsize=(12, 10)) # Made figure larger for legend
 
-    clusters = np.unique(cluster_ids_n.detach().cpu().numpy())
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-
-    for cluster, color in zip(clusters, _sample_colors(n_colors=len(clusters))):
-        cluster_elements_n2 = embedding_n2[cluster_ids_n == cluster]
-        colors_n3           = np.array([color] * len(cluster_elements_n2)) / 255.
-        ax.scatter( cluster_elements_n2[:, 0],
-                    cluster_elements_n2[:, 1],
-                    s=5, alpha=0.6, linewidths=0, c=colors_n3,
-                    label=f"Cluster {cluster}")
+    if colors and legend:
+        colors_arr = np.array(colors)
+        for label, color_rgb in legend.items():
+            # Find all points that have this color
+            indices = np.where((colors_arr == color_rgb).all(axis=1))[0]
+            if len(indices) > 0:
+                ax.scatter(
+                    embedding_n2[indices, 0],
+                    embedding_n2[indices, 1],
+                    s=5,
+                    alpha=0.7,
+                    linewidths=0,
+                    color=np.array(color_rgb) / 255.0,
+                    label=label
+                )
+        ax.legend(title="Action Categories", markerscale=4, fontsize=9)
+    else:
+        # Fallback to a simple plot if no legend is provided
+        ax.scatter(embedding_n2[:, 0], embedding_n2[:, 1], s=5, alpha=0.6)
 
     ax.set(title="UMAP Projection of Latent Actions", xlabel="UMAP-1", ylabel="UMAP-2")
-    ax.legend(title="Clusters", markerscale=4, fontsize=8)
-
     fig.tight_layout()
 
     vis_dir.mkdir(parents=True, exist_ok=True)
@@ -93,7 +72,7 @@ def umap_visualization(latent_actions_mu_n1d:   Tensor,
     plt.close(fig)
 
     print(f"[AdaWorld] UMAP plot saved to: {viz_path.resolve()}")
-    return embedding_n2, cluster_ids_n
+    return embedding_n2, fig
 
 
 def kmeans_cluster_latent_actions(latent_actions_mu_n1d:    Tensor,
