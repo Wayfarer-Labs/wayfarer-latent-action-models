@@ -431,6 +431,6 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
 if __name__ == "__main__":
-    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_debug.yml")
+    config = LatentActionModelTrainingConfig.from_yaml("configs/lam.yml")
     trainer = Trainer_LatentActionModel(config)
     trainer.train()
