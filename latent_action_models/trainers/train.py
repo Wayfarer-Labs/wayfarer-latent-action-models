@@ -129,7 +129,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             kl_loss     = kl_divergence(lam_outputs['mean_bn1d'], lam_outputs['logvar_bn1d'])
             total_loss  = mse_loss + (self.beta * kl_loss)
             grad_norm   = self.optim_step(total_loss)
-            
+
             if self.should_log:
                 reconstructed_frames_nchw   = eo.rearrange(lam_outputs['reconstructed_video_bnchw'],
                                                             'b n c h w -> (b n) c h w').clip(0, 1)
@@ -206,7 +206,13 @@ class Trainer_LatentActionModel(BaseTrainer):
 
             if self.should_log:      self.log_step(info)
             if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
-            if self.should_validate: self.validate()
+            if self.should_validate: 
+                try: self.validate()
+                except Exception as e:
+                    print(f'Validation failed')
+                    import traceback
+                    traceback.print_exc()
+                    
             if bool(self.debug_show_samples) and self.should_log:
                 wandb.log({
                     f'debug/sample_{self.debug_show_samples}_video': as_wandb_video(video_bnchw, "video"),

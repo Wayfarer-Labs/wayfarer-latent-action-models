@@ -37,7 +37,21 @@ class BaseTrainer(nn.Module):
                                 weight_decay=cfg.weight_decay,
                                 betas=cfg.betas)
 
-        self.scheduler      = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, cfg.max_steps)
+        warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+            self.optimizer, 
+            start_factor=0.001,
+            end_factor=1.0,
+            total_iters=cfg.max_steps // 10  # 10% of total steps for warmup
+        )
+        cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer,
+            T_max=cfg.max_steps - (cfg.max_steps // 10)
+        )
+        self.scheduler = torch.optim.lr_scheduler.SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[cfg.max_steps // 10]
+        )
         self.max_grad_norm  = cfg.max_grad_norm
         self.use_amp        = cfg.amp
         self.scaler         = torch.amp.GradScaler(self.device.type)

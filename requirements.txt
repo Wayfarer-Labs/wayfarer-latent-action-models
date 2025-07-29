@@ -10,6 +10,7 @@ wandb[media]
 einops
 torch
 toolz
+ray
 piq
 tqdm
 umap-learn[plot]
