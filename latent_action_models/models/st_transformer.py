@@ -34,7 +34,7 @@ class CrossAttention(nn.Module):
         proj_bias:  bool    = True,
         qk_norm:    bool    = True,
         attn_drop:  float   = 0.0,
-        use_rotary: bool    = False,
+        use_rotary: bool    = True,
     ):
         super().__init__()
 
@@ -57,8 +57,8 @@ class CrossAttention(nn.Module):
         self.rotary     = use_rotary   and RotaryEmbedding(dim=self.head_dim)
 
     def forward(self, x_query: torch.Tensor, x_context: torch.Tensor) -> torch.Tensor:
-        B, N_q, Cq = x_query  .shape
-        B, N_c, _ = x_context.shape
+        B, N_q, Cq  = x_query   .shape
+        B, N_c, _   = x_context .shape
 
         q   = self.q(x_query)
         q   = rearrange(q, 'b n (h d) -> b h n d', h=self.num_heads)

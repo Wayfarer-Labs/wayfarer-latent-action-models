@@ -124,10 +124,15 @@ class LatentActionModel(nn.Module):
                                     logvar_bn1d  = eo.rearrange(logvar_bv,  '(b n) d -> b n 1 d', b=B))
 
     def condition_video_to_actions(self,
-                                   video_patches_bpnd:  Tensor,
+                                   video_patches_bnpd:  Tensor,
                                    action_proj_bn1c:    Tensor) -> Tensor:
-        if self.conditioning == 'add':          return video_patches_bpnd + action_proj_bn1c
-        if self.conditioning == 'crossattn':    return self.cond_net(action_proj_bn1c, video_patches_bpnd)
+        if self.conditioning == 'add':          return video_patches_bnpd + action_proj_bn1c
+        if self.conditioning == 'crossattn':
+            B,N,P,D                 = video_patches_bnpd.shape
+            conditional_video_bpd   = self.cond_net(eo.rearrange(video_patches_bnpd,    'b n p d -> b (n p) d'),
+                                                    eo.rearrange(action_proj_bn1c,      'b n 1 c -> b (n 1) c'))
+            conditional_video_bnpd  = eo.rearrange(conditional_video_bpd, 'b (n p) d -> b n p d', n=N, p=P)
+            return conditional_video_bnpd
 
     def decode_to_frame(self,
                         video_bnchw: Tensor,
@@ -141,9 +146,9 @@ class LatentActionModel(nn.Module):
 
         action_conditioned_patches_bnpc     = self.condition_video_to_actions(prev_video_proj_patches_bnpc, action_proj_patches_bn1c)
         
-        video_reconstruction_bnpd           = self.decoder(prev_video_proj_patches_bnpc + action_proj_patches_bn1c)
-        video_reconstruction_bnpd           = F.sigmoid(video_reconstruction_bnpd)
-        video_reconstruction_bnchw          = self._unpatchify(video_reconstruction_bnpd)
+        video_reconstruction_bnpd           = self.decoder      (action_conditioned_patches_bnpc)
+        video_reconstruction_bnpd           = F.sigmoid         (video_reconstruction_bnpd)
+        video_reconstruction_bnchw          = self._unpatchify  (video_reconstruction_bnpd)
 
         return ActionDecodingInfo(condition_video_bnchw     = video_bnchw,
                                   reconstructed_video_bnchw = video_reconstruction_bnchw)
