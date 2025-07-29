@@ -5,6 +5,7 @@ import  torch
 import  colorsys
 import  einops as eo
 import  pandas as pd, polars as pl
+import  numpy as np
 from    datetime            import timedelta
 from    typing              import Literal, Optional
 from    torch               import Tensor
@@ -174,7 +175,8 @@ def colors_labels_from_actions(
     GRAY = (128, 128, 128)
     IDLE_COLOR = (220, 220, 220)
     NO_ACTION_COLOR = (0, 0, 0)
-    
+    MISSING_DATA_COLOR = (255, 0, 255) # Fuchsia for easy debugging
+
     # ... (code to find common_labels_list is the same as before) ...
     keypress_cols = sorted([c for c in full_actions_df.columns if c.startswith('keypress_')])
     keypress_combo_expr = pl.concat_str(
@@ -195,7 +197,7 @@ def colors_labels_from_actions(
                        .get_column("keypress_combo").to_list())
     
     # --- Step 3 (Create Legend Map) is unchanged ---
-    legend_map = { "OTHER": GRAY, "IDLE": IDLE_COLOR, "NO_ACTION": NO_ACTION_COLOR }
+    legend_map = { "OTHER": GRAY, "IDLE": IDLE_COLOR, "NO_ACTION": NO_ACTION_COLOR, "MISSING_DATA": MISSING_DATA_COLOR }
     # ... (code to populate legend_map with distinct colors is the same as before) ...
     distinct_colors = _sample_colors(len(common_labels_list))
     for label, color in zip(common_labels_list, distinct_colors):
@@ -207,21 +209,112 @@ def colors_labels_from_actions(
 
     for clip_data in actions_batch:
         if isinstance(clip_data, pl.DataFrame):
-            clip_with_labels = clip_data.with_columns(keypress_combo_expr)
-            for row in clip_with_labels.to_dicts():
+            # --- MODIFIED: Handle potentially empty or incomplete DataFrames ---
+            rows = clip_data.with_columns(keypress_combo_expr).to_dicts()
+            num_rows_found = len(rows)
+
+            for row in rows:
                 combo = row['keypress_combo']
+                
                 if combo in common_labels_list: label = combo.upper()
                 elif combo == "":               label = "IDLE"
                 else:                           label = "OTHER"
                 
-                output_labels.append(label)             # Add the string label
-                output_colors.append(legend_map[label]) # Add the corresponding color
-        else:
-            output_labels.extend(["NO_ACTION"]      * num_frames_per_clip)
-            output_colors.extend([NO_ACTION_COLOR]  * num_frames_per_clip)
+                output_labels.append(label)
+                output_colors.append(legend_map[label])
+            
+            # If we found fewer rows than expected, pad the lists with a placeholder
+            if num_rows_found < num_frames_per_clip:
+                num_missing = num_frames_per_clip - num_rows_found
+                output_labels.extend(["MISSING DATA"] * num_missing)
+                output_colors.extend([MISSING_DATA_COLOR] * num_missing)
+        
+        else:  # 'NO_ACTION'
+            output_labels.extend(["NO_ACTION"] * num_frames_per_clip)
+            output_colors.extend([NO_ACTION_COLOR] * num_frames_per_clip)
             
     return (
         output_colors,
         output_labels,
         legend_map
     )
+
+def get_quiver_vectors_from_actions(
+    actions_batch: list[pl.DataFrame | Literal['NO_ACTION']],
+    num_frames_per_clip: int
+) -> tuple[list[float], list[float]]:
+    """
+    Extracts dx and dy mouse vectors from a batch of action data and normalizes
+    their magnitudes for use in a quiver plot with controlled min/max arrow lengths.
+
+    Returns:
+        A tuple of (u, v) lists for the vector components.
+    """
+    all_dx = []
+    all_dy = []
+
+    # 1. Gather all dx and dy values from the batch
+    for clip_data in actions_batch:
+        if isinstance(clip_data, pl.DataFrame) and not clip_data.is_empty():
+            all_dx.extend(clip_data['dx'].to_list())
+            all_dy.extend(clip_data['dy'].to_list())
+        else: # 'NO_ACTION'
+            # For clips with no data, the vector is (0, 0)
+            all_dx.extend([0.0] * num_frames_per_clip)
+            all_dy.extend([0.0] * num_frames_per_clip)
+    
+    # 2. Apply magnitude-controlled scaling
+    dx_arr = np.array(all_dx)
+    dy_arr = np.array(all_dy)
+    
+    # Arrow length constraints
+    min_arrow_length = 0.45  # Minimum visible arrow length
+    max_arrow_length = 0.90  # Maximum arrow length
+    
+    # Calculate magnitudes
+    magnitudes = np.hypot(dx_arr, dy_arr)
+    
+    # Initialize scaled arrays
+    u_scaled = np.zeros_like(dx_arr)
+    v_scaled = np.zeros_like(dy_arr)
+    
+    # Find non-zero magnitudes for scaling reference
+    non_zero_mask = magnitudes > 0
+    
+    if np.any(non_zero_mask):
+        non_zero_mags = magnitudes[non_zero_mask]
+        
+        # Use percentile-based scaling for better distribution
+        mag_min = np.percentile(non_zero_mags, 10)  # 10th percentile
+        mag_max = np.percentile(non_zero_mags, 90)  # 90th percentile
+        
+        # Avoid division by zero if all non-zero magnitudes are the same
+        if mag_max > mag_min:
+            # Scale non-zero vectors
+            for i in range(len(magnitudes)):
+                if magnitudes[i] > 0:
+                    # Normalize to unit vector
+                    u_unit = dx_arr[i] / magnitudes[i]
+                    v_unit = dy_arr[i] / magnitudes[i]
+                    
+                    # Scale magnitude to be between min and max
+                    # Linear interpolation between min and max arrow lengths
+                    normalized_mag = np.clip((magnitudes[i] - mag_min) / (mag_max - mag_min), 0, 1)
+                    scaled_mag = min_arrow_length + normalized_mag * (max_arrow_length - min_arrow_length)
+                    
+                    # Apply scaled magnitude to unit vector
+                    u_scaled[i] = u_unit * scaled_mag
+                    v_scaled[i] = v_unit * scaled_mag
+                # else: magnitude is 0, so u_scaled[i] and v_scaled[i] remain 0
+        else:
+            # All non-zero magnitudes are the same, use minimum arrow length
+            for i in range(len(magnitudes)):
+                if magnitudes[i] > 0:
+                    u_unit = dx_arr[i] / magnitudes[i]
+                    v_unit = dy_arr[i] / magnitudes[i]
+                    u_scaled[i] = u_unit * min_arrow_length
+                    v_scaled[i] = v_unit * min_arrow_length
+    
+    # Zero magnitudes automatically remain (0, 0) due to initialization
+        
+    return u_scaled.tolist(), v_scaled.tolist()

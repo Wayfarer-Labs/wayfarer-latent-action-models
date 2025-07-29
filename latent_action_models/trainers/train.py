@@ -3,21 +3,25 @@ import  piq
 import  time
 import  polars as pl
 import  torch
+import  pandas as pd
 import  wandb
 import  pathlib
 import  traceback
 import  dataclasses
 import  einops as eo
-from    typing      import TypedDict, NotRequired
+import  plotly.express as px
 from    torch.types import Number
 from    torch       import Tensor
 import  torch.nn.functional as F
+import  plotly.figure_factory as ff
+import  plotly.graph_objects as go
+from    typing      import TypedDict, NotRequired
 
 from latent_action_models.models.latent_action_model    import ActionEncodingInfo, LatentActionModel, LatentActionModelOutput
 from latent_action_models.configs                       import LatentActionModelTrainingConfig
 from latent_action_models.trainers.base_trainer         import BaseTrainer
 from latent_action_models.action_creation.clustering    import umap_visualization
-from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, init_distributed, colors_labels_from_actions
+from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, init_distributed, colors_labels_from_actions, get_quiver_vectors_from_actions
 from latent_action_models.data_exploration              import create_actions_parquet as lam_parquet
 
 
@@ -204,7 +208,6 @@ class Trainer_LatentActionModel(BaseTrainer):
             if bool(self.debug_show_samples) and self.should_log:
                 wandb.log({
                     f'debug/sample_{self.debug_show_samples}_video': as_wandb_video(video_bnchw, "video"),
-                    f'debug/sample_{self.debug_show_samples}_recon': as_wandb_video(info['reconstructed_frames_bnchw'],"recon"),
                 }, step=self.global_step)
                 self.debug_show_samples -= 1
             
@@ -267,16 +270,53 @@ class Trainer_LatentActionModel(BaseTrainer):
 
             if self.rank == 0:
                 # -- umap
-                umap_table                      = wandb.Table(columns=['umap_x', 'umap_y', 'action_label'])
                 colors, labels, legend          = colors_labels_from_actions(groundtruth_actions_list, parquet, num_frames_per_clip=action_info['mean_bn1d'].shape[1])
+                u, v                            = get_quiver_vectors_from_actions(groundtruth_actions_list, num_frames_per_clip=action_info['mean_bn1d'].shape[1])
                 umap_embed_n2, fig              = umap_visualization(latent_actions_n1d,
                                                                      colors=colors,
                                                                      legend=legend,
                                                                      vis_filename=f'umap_visualization_{self.save_path}'.replace('.pt', ''))
 
-                for (x,y), label in zip(umap_embed_n2, labels):
-                    umap_table.add_data(x,y, label)
+                umap_df = pd.DataFrame({
+                    'umap_x': umap_embed_n2[:, 0],
+                    'umap_y': umap_embed_n2[:, 1],
+                    'action_label': labels, 'colors': colors,
+                    'u': u, 'v': v
+                })
+                fig = go.Figure()
+                unique_labels   = umap_df['action_label'].unique()
+                color_map       = dict(zip(unique_labels, px.colors.qualitative.Set1[:len(unique_labels)]))
+                for label in unique_labels:
+                    label_data = umap_df[umap_df['action_label'] == label]
 
+                    quiver_fig = ff.create_quiver(
+                        label_data['umap_x'], label_data['umap_y'], label_data['u'], label_data['v'],
+                        scale=0.4, arrow_scale=0.25, line=dict(color=color_map[label], width=2)
+                    )
+
+                    for trace in quiver_fig.data:
+                        trace.name = f'Arrows - {label}'
+                        trace.showlegend = False
+                        fig.add_trace(trace)
+                    
+                    fig.add_trace(go.Scatter(
+                        x=label_data['umap_x'], y=label_data['umap_y'],
+                        mode='markers', marker=dict(size=7, color=color_map[label], opacity=0.75),
+                        name=f'Points - {label}', text=[f'u: {u_val:.3f}, v: {v_val:.3f}' for u_val, v_val in zip(label_data['u'], label_data['v'])],
+                        hovertemplate=f'<b>{label}</b><br>%{{text}}<br>X: %{{x:.3f}}<br>Y: %{{y:.3f}}<extra></extra>'
+                    ))
+                
+                fig.update_layout(
+                    title='UMAP Visualization with Colored Arrows',
+                    xaxis_title='UMAP Component 1',
+                    yaxis_title='UMAP Component 2'
+                )
+
+
+                vis_path = f"visualizations/umap_vis_colored_arrows_{self.global_step}.html"
+                fig.write_html(vis_path, auto_play=False)
+                scatter_table = wandb.Table(columns=['scatter_plot'])
+                scatter_table.add_data(wandb.Html(vis_path))
                 # -- reconstruction
                 video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
                 for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
@@ -287,9 +327,9 @@ class Trainer_LatentActionModel(BaseTrainer):
                 if self._wandb_run:
                     print(f"[rank {self.rank}] logging to wandb")
                     wandb.log({
-                        f"UMAP Table (Interactive)/{self.global_step}":     umap_table,
-                        f"Reconstruction/{self.global_step}":               video_table,
-                        f"UMAP Plot (Static)/{self.global_step}":       wandb.Image(fig),
+                        f"UMAP Table (Interactive)":     scatter_table,
+                        f"Reconstruction":               video_table,
+                        f"UMAP Plot (Static)":           wandb.Image(fig),
                     },  step=self.global_step)
 
         print(f"[rank {self.rank}] validation done")
