@@ -53,6 +53,7 @@ def create_latent_action_model(config: LatentActionModelTrainingConfig) -> Laten
         num_dec_blocks  = config.num_dec_blocks,
         num_heads       = config.num_heads,
         dropout         = config.dropout,
+        conditioning    = config.conditioning
     )
 
 def kl_divergence(mean: Tensor, logvar: Tensor) -> Tensor:
@@ -215,7 +216,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                     
             if bool(self.debug_show_samples) and self.should_log:
                 wandb.log({
-                    f'debug/sample_{self.debug_show_samples}_video': as_wandb_video(video_bnchw, "video"),
+                    f'debug/sample_{self.debug_show_samples}_video': as_wandb_video((video_bnchw+1.)/2., "video"),
                 }, step=self.global_step)
                 self.debug_show_samples -= 1
             
@@ -288,9 +289,9 @@ class Trainer_LatentActionModel(BaseTrainer):
                 # --- Reconstruction table (unchanged) ---
                 video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
                 for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
-                    video_table.add_data(as_wandb_video(cond,  "Conditioning"),
-                                        as_wandb_video(recon, "Predicted next-frame"),
-                                        as_wandb_video(gt,    "Ground-truth next-frame"))
+                    video_table.add_data(as_wandb_video((cond+1.)/2.,  "Conditioning"),
+                                        as_wandb_video((recon+1.)/2., "Predicted next-frame"),
+                                        as_wandb_video((gt+1.)/2.,    "Ground-truth next-frame"))
 
                 # --- Simplified logging ---
                 if self._wandb_run:

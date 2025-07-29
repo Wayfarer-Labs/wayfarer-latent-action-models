@@ -41,16 +41,16 @@ class BaseTrainer(nn.Module):
             self.optimizer, 
             start_factor=0.001,
             end_factor=1.0,
-            total_iters=cfg.max_steps // 10  # 10% of total steps for warmup
+            total_iters=cfg.max_steps // 20.  # 1% of total steps for warmup
         )
         cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_max=cfg.max_steps - (cfg.max_steps // 10)
+            T_max=cfg.max_steps - (cfg.max_steps // 20.)
         )
         self.scheduler = torch.optim.lr_scheduler.SequentialLR(
             self.optimizer,
             schedulers=[warmup_scheduler, cosine_scheduler],
-            milestones=[cfg.max_steps // 10]
+            milestones=[cfg.max_steps // 20.]
         )
         self.max_grad_norm  = cfg.max_grad_norm
         self.use_amp        = cfg.amp

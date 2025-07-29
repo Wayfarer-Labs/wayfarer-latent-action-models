@@ -59,19 +59,22 @@ class BaseTrainerConfig:
 
 @dataclass
 class LatentActionModelTrainingConfig(BaseTrainerConfig):
-    video_dims:      tuple[int, int] = (64, 64)
-    in_dim:          int             = 3
-    model_dim:       int             = 64
-    vae_dim:         int             = 16
-    patch_size:      int             = 8
-    num_enc_blocks:  int             = 4
-    num_dec_blocks:  int             = 4
-    num_heads:       int             = 4
-    dropout:         float           = 0.0
+    video_dims:      tuple[int, int]    = (64, 64)
+    in_dim:          int                = 3
+    model_dim:       int                = 64
+    vae_dim:         int                = 16
+    patch_size:      int                = 8
+    num_enc_blocks:  int                = 4
+    num_dec_blocks:  int                = 4
+    num_heads:       int                = 4
+    dropout:         float              = 0.0
 
-    beta:            float           = 0.0    # KL weight
-    val_num_samples_umap:   int      = 1000
-    val_num_samples_recon:  int      = 5
+    beta:            float              = 0.0    # KL weight
+    val_num_samples_umap:   int         = 1000
+    val_num_samples_recon:  int         = 5
+
+    conditioning: Literal['add', 'crossattn'] = 'add'
+    conditioning_kwargs: dict           = field(default_factory=dict)
 
     @classmethod
     def from_yaml(cls, yaml_path: str | pathlib.Path) -> LatentActionModelTrainingConfig:

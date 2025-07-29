@@ -2,7 +2,7 @@ ckpt_dir: checkpoints            # where checkpoints go
 resume_checkpoint: null          # path to *.pt to resume from (or null)
 
 # -- optimizer
-lr: 2.5e-5                       # AdamW learning-rate
+lr: 3.0e-6                       # AdamW learning-rate
 weight_decay: 0.01
 betas: [0.9, 0.999]
 amp: true                        # mixed-precision (16-mixed)
@@ -30,9 +30,9 @@ val_every: 250
 
 # -- dataset
 data:
-  batch_size: 8                 # keep in sync with trainer batch_size
+  batch_size: 64                 # keep in sync with trainer batch_size
   dataset_name: owl_data
   num_frames: 2
   resolution: 256
-  samples_per_epoch: 200000
+  samples_per_epoch: 100000
   num_workers: 0

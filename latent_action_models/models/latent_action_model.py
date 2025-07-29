@@ -3,9 +3,13 @@ import  einops      as eo
 import  torch.nn    as nn
 from    torch       import Tensor
 import  torch.nn.functional as F
-from    typing      import TypedDict
+from    typing      import TypedDict, Literal, Any
 
-from    latent_action_models.models.st_transformer import S_Transformer, ST_Transformer
+from    latent_action_models.models.st_transformer import (
+    S_Transformer,
+    ST_Transformer,
+    CrossAttention  # action conditioning  
+)
 import  latent_action_models.utils as utils
 
 
@@ -32,15 +36,18 @@ class LatentActionModelOutput(TypedDict):
 
 class LatentActionModel(nn.Module):
     def __init__(self,
-                 video_dims:        tuple[int, int],
-                 in_dim:            int,
-                 model_dim:         int,
-                 vae_dim:           int,
-                 patch_size:        int,
-                 num_enc_blocks:    int,
-                 num_dec_blocks:    int,
-                 num_heads:         int,
-                 dropout:           float = 0.0):
+                 video_dims:            tuple[int, int],
+                 in_dim:                int,
+                 model_dim:             int,
+                 vae_dim:               int,
+                 patch_size:            int,
+                 num_enc_blocks:        int,
+                 num_dec_blocks:        int,
+                 num_heads:             int,
+                 dropout:               float = 0.0,
+                 conditioning:          Literal['add', 'crossattn'] = 'add',
+                 conditioning_kwargs:   dict[str, Any]              = {}):
+
         super(LatentActionModel, self).__init__()
         self.in_dim     = in_dim
         self.model_dim  = model_dim
@@ -51,6 +58,16 @@ class LatentActionModel(nn.Module):
         self.video_height, self.video_width = video_dims
 
         self.action_prompt  = nn.Parameter(torch.empty(1,1,1, self.patch_token_dim))
+        # -- how the video and actions get mixed together
+        self.conditioning   = conditioning
+        self.cond_kwargs    = conditioning_kwargs
+        self.cond_net       = nn.Identity()
+        
+        if self.conditioning == 'crossattn':
+            self.cond_net   = CrossAttention(num_heads  = (num_heads // 4) or 1,
+                                             d_model    = self.model_dim,
+                                             **self.cond_kwargs)
+        
         nn.init.uniform_(self.action_prompt, a=-1, b=1)
     
         self.encoder        = ST_Transformer(in_dim=self.patch_token_dim,
@@ -71,7 +88,7 @@ class LatentActionModel(nn.Module):
                                             num_heads=num_heads,
                                             dropout=dropout)
 
-        print(f'[LatentActionModel] ✅ model initialized with num_params={sum(p.numel() for p in self.parameters()):,}')
+        print(f'[LatentActionModel] model initialized with num_params={sum(p.numel() for p in self.parameters()):,}')
     
     
     def _patchify(self, video_bnchw: Tensor) -> Tensor:
@@ -106,19 +123,27 @@ class LatentActionModel(nn.Module):
                                     mean_bn1d    = eo.rearrange(mean_bv,    '(b n) d -> b n 1 d', b=B),
                                     logvar_bn1d  = eo.rearrange(logvar_bv,  '(b n) d -> b n 1 d', b=B))
 
+    def condition_video_to_actions(self,
+                                   video_patches_bpnd:  Tensor,
+                                   action_proj_bn1c:    Tensor) -> Tensor:
+        if self.conditioning == 'add':          return video_patches_bpnd + action_proj_bn1c
+        if self.conditioning == 'crossattn':    return self.cond_net(action_proj_bn1c, video_patches_bpnd)
+
     def decode_to_frame(self,
                         video_bnchw: Tensor,
                         action_bn1d: Tensor) -> ActionDecodingInfo:
         # -- d: patch_token_dim. raw patchified video (not encoding) to prevent collusion between encoder/decoder
         # -- v: vae_dim (dimension of mixture of gaussians in vae)
         # -- c: model_dim, dimension of the pixel decoder (also identical to encoder dim)
-        video_patches_bnpd           = self._patchify(video_bnchw)
-        prev_video_proj_patches_bnpc = self.patch_proj(video_patches_bnpd)
-        action_proj_patches_bn1c     = self.action_proj  (action_bn1d)
+        video_patches_bnpd                  = self._patchify(video_bnchw)
+        prev_video_proj_patches_bnpc        = self.patch_proj(video_patches_bnpd)
+        action_proj_patches_bn1c            = self.action_proj  (action_bn1d)
 
-        video_reconstruction_bnpd   = self.decoder(prev_video_proj_patches_bnpc + action_proj_patches_bn1c)
-        video_reconstruction_bnpd   = F.sigmoid(video_reconstruction_bnpd)
-        video_reconstruction_bnchw  = self._unpatchify(video_reconstruction_bnpd)
+        action_conditioned_patches_bnpc     = self.condition_video_to_actions(prev_video_proj_patches_bnpc, action_proj_patches_bn1c)
+        
+        video_reconstruction_bnpd           = self.decoder(prev_video_proj_patches_bnpc + action_proj_patches_bn1c)
+        video_reconstruction_bnpd           = F.sigmoid(video_reconstruction_bnpd)
+        video_reconstruction_bnchw          = self._unpatchify(video_reconstruction_bnpd)
 
         return ActionDecodingInfo(condition_video_bnchw     = video_bnchw,
                                   reconstructed_video_bnchw = video_reconstruction_bnchw)

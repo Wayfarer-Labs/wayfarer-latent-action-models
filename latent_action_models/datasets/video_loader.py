@@ -1,5 +1,7 @@
 import zmq
 import torch
+from pathlib import Path
+import numpy as np
 
 class VideoServerLoader:
     """
@@ -69,10 +71,20 @@ class VideoServerIterableDataset(IterableDataset):
             # Block if queue is full
             self._buffer_queue.put(buffer)
 
+    def _different_episodes(self, vid_path: str, start_frame: int, end_frame: int)->bool:
+        vid_path_path = Path(vid_path)
+        episode = int(vid_path_path.stem.split('_')[-1])
+        episode_end_path = vid_path_path.parent.parent / 'segment_indices' / f'segment_idx_{episode}.bin'
+        episode_ends = np.memmap(episode_end_path, dtype=np.int32)
+        return bool(episode_ends[start_frame] != episode_ends[end_frame])
+
     def __iter__(self):
         while True:
             buffer = self._buffer_queue.get()
             for item in buffer:
+                if self._different_episodes(item['metadata']['vid_path'], item['metadata']['start_frame'], item['metadata']['end_frame']):
+                    print(f'overlap detected ,skipping item!')
+                    continue
                 yield item
 
     def __del__(self):

@@ -24,6 +24,67 @@ class PositionalEncoding(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return x + self.pos_enc[:x.shape[2]].to(x.device)
 
+class CrossAttention(nn.Module):
+    def __init__(
+        self,
+        num_heads:  int,
+        d_model:    int,
+        dropout:    float   = 0.0,
+        qkv_bias:   bool    = False,
+        proj_bias:  bool    = True,
+        qk_norm:    bool    = True,
+        attn_drop:  float   = 0.0,
+        use_rotary: bool    = False,
+    ):
+        super().__init__()
+
+        self.num_heads  = num_heads
+        self.head_dim   = d_model // num_heads
+
+        # Scaling by 8 to be equal when head_dim=64
+        self.scale      = math.sqrt(self.head_dim)
+        self.q          = nn.Linear(d_model, d_model * 1, bias=qkv_bias)
+        self.kv         = nn.Linear(d_model, d_model * 2, bias=qkv_bias)
+        self.attn_drop  = nn.Dropout(attn_drop)
+        self.proj       = nn.Sequential(
+            nn.Linear(d_model, d_model, bias=proj_bias),
+            nn.Dropout(dropout)
+        )
+
+        # qk normalization https://arxiv.org/pdf/2302.05442
+        # Note that LN is done in fp32, so they have to be
+        self.qk_norm    = qk_norm      and nn.LayerNorm(self.head_dim, eps=1e-05)
+        self.rotary     = use_rotary   and RotaryEmbedding(dim=self.head_dim)
+
+    def forward(self, x_query: torch.Tensor, x_context: torch.Tensor) -> torch.Tensor:
+        B, N_q, Cq = x_query  .shape
+        B, N_c, _ = x_context.shape
+
+        q   = self.q(x_query)
+        q   = rearrange(q, 'b n (h d) -> b h n d', h=self.num_heads)
+
+        kv  = self.kv(x_context)
+        k,v = rearrange(kv, 'b n (two h d) -> two b h n d', two=2, h=self.num_heads)
+
+        if self.rotary:
+            q = self.rotary.rotate_queries_or_keys(q, self.rotary.freqs).contiguous() 
+            k = self.rotary.rotate_queries_or_keys(k, self.rotary.freqs).contiguous()
+
+        if self.qk_norm:
+            q,k = self.qk_norm(q),      self.qk_norm(k)
+            q,k = q.to(dtype=v.dtype),  k.to(dtype=v.dtype)
+
+        q *= self.scale
+
+        attn: Tensor    = q @ k.transpose(-2, -1)
+        attn            = attn.softmax(dim=-1)
+        attn            = self.attn_drop(attn)
+
+        x = rearrange(attn @ v, 'b h n d -> b n (h d)')
+        x = self.proj(x)
+        return x
+
+
 class SelfAttention(nn.Module):
     def __init__(
         self,
