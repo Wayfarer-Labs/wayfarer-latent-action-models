@@ -58,7 +58,7 @@ def create_dataloader(config: DataConfig) -> DataLoader:
     rank, world, _  = init_distributed()
     dataset         = _dataset(config.dataset_name, config, rank, world)
 
-    return DataLoader(dataset, batch_size=config.batch_size)
+    return DataLoader(dataset, batch_size=config.batch_size, num_workers=config.num_workers)
 
 
 if __name__ == "__main__":
@@ -67,7 +67,7 @@ if __name__ == "__main__":
         "resolution": 256,
         "num_frames": 2,
         "batch_size": 8,
-        "num_threads": 4,
+        "num_workers": 4,
     })
     dl              = create_dataloader(data)
     

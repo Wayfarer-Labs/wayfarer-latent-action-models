@@ -16,7 +16,7 @@ class DataConfig:
     resolution:          int      = 256 # TODO use this.
     num_frames:          int      = 2
     samples_per_epoch:   int      = 1_000_000
-    num_threads:         int      = 8
+    num_workers:         int      = 8
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DataConfig:
