@@ -4,13 +4,14 @@ import  torch
 from    pathlib                         import Path
 from    typing                          import Literal
 from    torch                           import Tensor
-from    torch.utils.data                import Dataset, DataLoader
+from    torch.utils.data                import Dataset, DataLoader, IterableDataset
 
-from    latent_action_models.configs                            import DataConfig
-from    latent_action_models.datasets.clip_metadata_generator   import _dataset_clips, ClipEntry
-from    latent_action_models.utils                              import init_distributed
-from    latent_action_models.datasets.decord_dataset            import DecordVideoDataset
-from    latent_action_models.datasets.robotics_1x_dataset       import Robotics_1X_Dataset
+from    latent_action_models.configs                                import DataConfig
+from    latent_action_models.datasets.clip_metadata_generator       import _dataset_clips, ClipEntry
+from    latent_action_models.utils                                  import init_distributed
+from    latent_action_models.datasets.decord_dataset                import DecordVideoDataset
+from    latent_action_models.datasets.robotics_1x_dataset           import Robotics_1X_Dataset
+from    latent_action_models.datasets.video_loader                  import VideoServerIterableDataset, video_collate_fn
 
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' 
 
@@ -54,16 +55,26 @@ def _dataset(dataset: Literal["call_of_duty"], config: DataConfig, rank: int = 0
 
     return DecordVideoDataset(clips, resolution=config.resolution, num_frames=config.num_frames)
 
+
 @multimethod
 def _dataset(dataset: Literal["1x_robotics"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
     return Robotics_1X_Dataset(config)
 
 
+@multimethod
+def _dataset(dataset: Literal["owl_data"], config: DataConfig, rank: int = 0, world: int = 1) -> IterableDataset:
+    return VideoServerIterableDataset(shuffle_buffer=64, num_workers=64)
+
+
 def create_dataloader(config: DataConfig) -> DataLoader:
     rank, world, _  = init_distributed()
     dataset         = _dataset(config.dataset_name, config, rank, world)
-
-    return DataLoader(dataset, batch_size=config.batch_size, num_workers=config.num_workers)
+    return DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        collate_fn=video_collate_fn if config.dataset_name == "owl_data" else None,
+    )
 
 
 if __name__ == "__main__":
@@ -71,12 +82,13 @@ if __name__ == "__main__":
         "dataset_name": "1x_robotics",
         "resolution": 256,
         "num_frames": 2,
-        "batch_size": 8,
-        "num_workers": 4,
+        "batch_size": 64,
+        "num_workers": 8,
     })
     dl              = create_dataloader(data)
-    
-    for _ in range(10):
-        video_bnchw     = next(iter(dl))
-        print(video_bnchw.shape)
+    import time
+    for i in range(10):
+        start = time.time()
+        video_bnchw,*_     = next(iter(dl))
+        print(f'{i}: {video_bnchw.shape} {time.time() - start}')
         print(f'checksum: {video_bnchw.sum()}')

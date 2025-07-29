@@ -31,8 +31,8 @@ val_every: 250
 # -- dataset
 data:
   batch_size: 8                 # keep in sync with trainer batch_size
-  dataset_name: 1x_robotics
+  dataset_name: owl_data
   num_frames: 2
   resolution: 256
   samples_per_epoch: 200000
-  num_workers: 24
+  num_workers: 0

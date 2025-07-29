@@ -7,6 +7,7 @@ polars
 decord
 torchcodec
 ipykernel
+opencv-python
 overloading
 wandb[media]
 einops

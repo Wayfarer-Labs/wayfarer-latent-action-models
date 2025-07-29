@@ -1,0 +1,3 @@
+[submodule "owl-data-2"]
+	path = owl-data-2
+	url = git@github.com:Wayfarer-Labs/owl-data-2.git

@@ -105,8 +105,9 @@ class Trainer_LatentActionModel(BaseTrainer):
         print(f"[rank {self.rank}] checkpoint saved to {path}")
 
 
-    def format_batch(self) -> tuple[Tensor, list[str], Tensor]:
-        try:    video_bnchw, video_paths, start_frame_b = next(self.iter_loader)
+    def format_batch(self) -> tuple[Tensor, dict]:
+        try:
+            video_bnchw, metadata = next(self.iter_loader)
         except  StopIteration: self.iter_loader         = iter(self.dataloader) ; return self.format_batch()
         except  Exception as e:
             print(f"[rank {self.rank}] error in format_batch: {e}") ; traceback.print_exc()
@@ -114,8 +115,7 @@ class Trainer_LatentActionModel(BaseTrainer):
 
         return  (
             video_bnchw.to(self.device),
-            video_paths,
-            start_frame_b.to(self.device)
+            metadata
         )
 
 
@@ -242,7 +242,7 @@ class Trainer_LatentActionModel(BaseTrainer):
 
         while _more_umap() or _more_recon():
             # REMOVED: No longer need paths or start indices from the batch
-            video_bnchw, _, _ = self.format_batch()
+            video_bnchw, _ = self.format_batch()
             
             if _more_umap():
                 action_info = model.encode_to_actions(video_bnchw)
@@ -259,8 +259,9 @@ class Trainer_LatentActionModel(BaseTrainer):
 
         if self._wandb_enabled:
             # -- Gather tensors from all GPUs --
-            latent_actions_n1d = torch.cat(latent_actions_list_bn1d, dim=0)
-            latent_actions_n1d = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
+            latent_actions_bn1d = torch.cat(latent_actions_list_bn1d, dim=0)
+            latent_actions_n1d  = eo.rearrange(latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
+            latent_actions_n1d  = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
 
             recon_videos_bnchw = torch.cat(recon_videos_list_bnchw, dim=0)
             lam_outputs = model.forward(recon_videos_bnchw)
@@ -429,6 +430,6 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
 if __name__ == "__main__":
-    config = LatentActionModelTrainingConfig.from_yaml("configs/lam.yml")
+    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_debug.yml")
     trainer = Trainer_LatentActionModel(config)
     trainer.train()

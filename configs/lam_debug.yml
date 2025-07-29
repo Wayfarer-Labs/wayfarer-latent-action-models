@@ -35,4 +35,4 @@ data:
   num_frames: 2
   resolution: 256
   samples_per_epoch: 200000
-  num_workers: 8
+  num_workers: 0

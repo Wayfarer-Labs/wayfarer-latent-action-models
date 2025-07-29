@@ -56,8 +56,9 @@ class Robotics_1X_Dataset(IterableDataset):
             for e in meta['num_frames_per_episode']
         }
         self.episode_to_nframes = valfilter(
+            lambda x: x >= self.min_frames_per_episode,
             self.episode_to_nframes,
-            lambda x: x >= self.min_frames_per_episode)
+        )
         
         self.episode_to_shard = {
             e: meta['shard_idx']
@@ -87,7 +88,7 @@ class Robotics_1X_Dataset(IterableDataset):
         images      = [decode_image(str(filename.absolute())) for filename in filenames]
         images      = [self.resize_fn(image) for image in images]
         video_nchw  = torch.stack(images)
-        return video_nchw, None, None
+        return video_nchw, 'nopath', torch.tensor(0)
 
     def __iter__(self):
         while True: yield self.get_random_video()
