@@ -21,7 +21,8 @@ from latent_action_models.models.latent_action_model    import ActionEncodingInf
 from latent_action_models.configs                       import LatentActionModelTrainingConfig
 from latent_action_models.trainers.base_trainer         import BaseTrainer
 from latent_action_models.action_creation.clustering    import umap_visualization
-from latent_action_models.utils                         import as_wandb_video, barrier, gather_to_rank, init_distributed, colors_labels_from_actions, get_quiver_vectors_from_actions
+from latent_action_models.utils                         import (
+    as_wandb_video, barrier, gather_to_rank, init_distributed, colors_labels_from_actions, get_quiver_vectors_from_actions, gather_objects_to_rank)
 from latent_action_models.data_exploration              import create_actions_parquet as lam_parquet
 
 
@@ -113,7 +114,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         return  (
             video_bnchw.to(self.device),
             video_paths,
-            start_frame_b
+            start_frame_b.to(self.device)
         )
 
 
@@ -229,6 +230,8 @@ class Trainer_LatentActionModel(BaseTrainer):
         num_processed_umap_samples  = 0 ; _more_umap  = lambda: num_processed_umap_samples  < num_samples_umap
         num_processed_recon_samples = 0 ; _more_recon = lambda: num_processed_recon_samples < num_samples_recon
         latent_actions_list_bn1d    = []
+        all_paths_local             = []
+        all_idx_start_b_local       = []
         groundtruth_actions_list    = []
         recon_videos_list_bnchw     = []
 
@@ -237,14 +240,9 @@ class Trainer_LatentActionModel(BaseTrainer):
             if _more_umap():
                 action_info: ActionEncodingInfo         = model .encode_to_actions(video_bnchw)
                 latent_actions_list_bn1d               += [action_info['mean_bn1d']]
+                all_paths_local                        += paths
+                all_idx_start_b_local                  += [idx_start_b]
                 # fetches the actions for a certain video at a certain start index. does not handle strides yet
-                groundtruth_actions_list               += [
-                    parquet.filter( (pl.col('video_path')   == p)  &
-                                    (pl.col('frame_idx')    >= i) &
-                                    (pl.col('frame_idx')    <  i + action_info['mean_bn1d'].shape[1]))
-                    if      parquet is not None else 'NO_ACTION'
-                    for     p,i in zip(paths, idx_start_b)
-                ]
                 num_umap_samples_in_batch               = action_info['mean_bn1d'].shape[0] * action_info['mean_bn1d'].shape[1]
                 num_processed_umap_samples             += num_umap_samples_in_batch
 
@@ -261,6 +259,10 @@ class Trainer_LatentActionModel(BaseTrainer):
             latent_actions_n1d  = eo.rearrange  (latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
             latent_actions_n1d  = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
 
+            all_idx_start_b     = torch.cat(all_idx_start_b_local, dim=0)
+            all_idx_start_b     = gather_to_rank(all_idx_start_b, dst=0, dim=0, cat=True)
+            all_paths_global    = gather_objects_to_rank(all_paths_local, dst=0)
+
             # -- reconstruction of image
             recon_videos_bnchw                      = torch.cat(recon_videos_list_bnchw, dim=0)
             lam_outputs: LatentActionModelOutput    = model.forward(recon_videos_bnchw)
@@ -270,6 +272,13 @@ class Trainer_LatentActionModel(BaseTrainer):
 
             if self.rank == 0:
                 # -- umap
+                groundtruth_actions_list               += [
+                    parquet.filter( (pl.col('video_path')   == p)  &
+                                    (pl.col('frame_idx')    >= i.item()) &
+                                    (pl.col('frame_idx')    <  i.item() + action_info['mean_bn1d'].shape[1]))
+                    if      parquet is not None else 'NO_ACTION'
+                    for     p,i in zip(all_paths_global, all_idx_start_b)
+                ]
                 colors, labels, legend          = colors_labels_from_actions(groundtruth_actions_list, parquet, num_frames_per_clip=action_info['mean_bn1d'].shape[1])
                 u, v                            = get_quiver_vectors_from_actions(groundtruth_actions_list, num_frames_per_clip=action_info['mean_bn1d'].shape[1])
                 umap_embed_n2, fig              = umap_visualization(latent_actions_n1d,
@@ -329,7 +338,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                     wandb.log({
                         f"UMAP Table (Interactive)":     scatter_table,
                         f"Reconstruction":               video_table,
-                        f"UMAP Plot (Static)":           wandb.Image(fig),
+                        f"UMAP Plot (Static)":           fig,
                     },  step=self.global_step)
 
         print(f"[rank {self.rank}] validation done")
@@ -337,6 +346,6 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
 if __name__ == "__main__":
-    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_debug.yml")
+    config = LatentActionModelTrainingConfig.from_yaml("configs/lam.yml")
     trainer = Trainer_LatentActionModel(config)
     trainer.train()

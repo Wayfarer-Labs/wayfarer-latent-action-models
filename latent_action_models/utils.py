@@ -133,6 +133,42 @@ def gather_to_rank(tensor:  Tensor,
 
     return torch.cat(shards, dim=dim) if cat else shards
 
+def gather_objects_to_rank(obj: object,
+                           dst: int = 0) -> Optional[list[object]]:
+    """
+    Gather arbitrary Python objects from all ranks to `dst`.
+
+    Returns
+    -------
+    • On `dst`:  a flattened list of the objects from all ranks.
+    • On others: None
+    • If dist not initialised: a list containing just the local `obj`.
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        return [obj]
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    # Prepare a list to receive objects on the destination rank
+    gathered_list = [None] * world_size if rank == dst else None
+    
+    # Perform the gather operation
+    dist.gather_object(
+        obj,
+        gathered_list if rank == dst else None,
+        dst=dst
+    )
+
+    if rank != dst:
+        return None
+
+    # On the destination rank, flatten the list of lists into a single list
+    # E.g., [[a, b], [c, d]] -> [a, b, c, d]
+    return [item for sublist in gathered_list for item in sublist]
+
+
+
 GRAY = (128, 128, 128)
 IDLE_COLOR = (220, 220, 220)
 _PALETTE    = (10, 35, 65, 125, 165, 225)
