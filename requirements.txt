@@ -1,9 +1,11 @@
+av
 multimethod
 multipledispatch
 plum-dispatch
 pyarrow
 polars
 decord
+torchcodec
 ipykernel
 overloading
 wandb[media]

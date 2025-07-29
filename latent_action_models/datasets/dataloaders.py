@@ -10,6 +10,7 @@ from    latent_action_models.configs                            import DataConfi
 from    latent_action_models.datasets.clip_metadata_generator   import _dataset_clips, ClipEntry
 from    latent_action_models.utils                              import init_distributed
 from    latent_action_models.datasets.decord_dataset            import DecordVideoDataset
+from    latent_action_models.datasets.robotics_1x_dataset       import Robotics_1X_Dataset
 
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' 
 
@@ -53,6 +54,10 @@ def _dataset(dataset: Literal["call_of_duty"], config: DataConfig, rank: int = 0
 
     return DecordVideoDataset(clips, resolution=config.resolution, num_frames=config.num_frames)
 
+@multimethod
+def _dataset(dataset: Literal["1x_robotics"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
+    return Robotics_1X_Dataset(config)
+
 
 def create_dataloader(config: DataConfig) -> DataLoader:
     rank, world, _  = init_distributed()
@@ -63,7 +68,7 @@ def create_dataloader(config: DataConfig) -> DataLoader:
 
 if __name__ == "__main__":
     data            = DataConfig().from_dict({
-        "dataset_name": "gta_4",
+        "dataset_name": "1x_robotics",
         "resolution": 256,
         "num_frames": 2,
         "batch_size": 8,

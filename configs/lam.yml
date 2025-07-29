@@ -6,11 +6,11 @@ lr: 2.5e-5                       # AdamW learning-rate
 weight_decay: 0.01
 betas: [0.9, 0.999]
 amp: true                        # mixed-precision (16-mixed)
-max_grad_norm: 0.5               # gradient-clip value
+max_grad_norm: 1.5               # gradient-clip value
 
 # -- training loop
 max_steps: 1000000
-log_every: 25                  # log interval
+log_every: 1                  # log interval
 ckpt_every: 5000                 # save interval
 
 # -- model
@@ -31,7 +31,7 @@ val_every: 250
 # -- dataset
 data:
   batch_size: 8                 # keep in sync with trainer batch_size
-  dataset_name: gta_4
+  dataset_name: 1x_robotics
   num_frames: 2
   resolution: 256
   samples_per_epoch: 200000

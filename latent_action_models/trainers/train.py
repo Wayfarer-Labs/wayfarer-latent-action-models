@@ -207,7 +207,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             if self.should_log:      self.log_step(info)
             if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
             if self.should_validate: 
-                try: self.validate()
+                try: self.validate_simple()
                 except Exception as e:
                     print(f'Validation failed')
                     import traceback
@@ -224,6 +224,83 @@ class Trainer_LatentActionModel(BaseTrainer):
 
         self.save_checkpoint(self.ckpt_dir / self.save_path)
         return
+
+    @torch.no_grad()
+    def validate_simple(self) -> None:
+        model: LatentActionModel    = self._model_unwrapped()
+        num_samples_umap            = self.cfg.val_num_samples_umap
+        num_samples_recon           = self.cfg.val_num_samples_recon
+
+        # -- Simplified data collection --
+        num_processed_umap_samples  = 0
+        _more_umap = lambda: num_processed_umap_samples < num_samples_umap
+        num_processed_recon_samples = 0
+        _more_recon = lambda: num_processed_recon_samples < num_samples_recon
+        
+        latent_actions_list_bn1d = []
+        recon_videos_list_bnchw = []
+
+        while _more_umap() or _more_recon():
+            # REMOVED: No longer need paths or start indices from the batch
+            video_bnchw, _, _ = self.format_batch()
+            
+            if _more_umap():
+                action_info = model.encode_to_actions(video_bnchw)
+                latent_actions_list_bn1d.append(action_info['mean_bn1d'])
+                num_umap_samples_in_batch = action_info['mean_bn1d'].shape[0] * action_info['mean_bn1d'].shape[1]
+                num_processed_umap_samples += num_umap_samples_in_batch
+
+            if _more_recon():
+                recon_videos_list_bnchw.append(video_bnchw[:num_samples_recon, ::])
+                num_recon_samples_in_batch = video_bnchw.shape[0]
+                num_processed_recon_samples += num_recon_samples_in_batch
+
+        print(f"[rank {self.rank}] validation data collected")
+
+        if self._wandb_enabled:
+            # -- Gather tensors from all GPUs --
+            latent_actions_n1d = torch.cat(latent_actions_list_bn1d, dim=0)
+            latent_actions_n1d = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
+
+            recon_videos_bnchw = torch.cat(recon_videos_list_bnchw, dim=0)
+            lam_outputs = model.forward(recon_videos_bnchw)
+            condition_video_bnchw = gather_to_rank(lam_outputs["condition_video_bnchw"], dst=0, dim=0, cat=True)
+            recon_video_bnchw = gather_to_rank(lam_outputs["reconstructed_video_bnchw"], dst=0, dim=0, cat=True)
+            gt_video_bnchw = gather_to_rank(lam_outputs["groundtruth_video_bnchw"], dst=0, dim=0, cat=True)
+
+            if self.rank == 0:
+                # --- SIMPLIFIED UMAP PLOTTING ---
+                
+                # 1. Get the 2D UMAP embedding (assuming a simplified umap_visualization helper)
+                umap_embed_n2, _ = umap_visualization(latent_actions_n1d)
+
+                # 2. Create a wandb.Table with just the coordinates
+                umap_table = wandb.Table(columns=['umap_x', 'umap_y'])
+                for x, y in umap_embed_n2:
+                    umap_table.add_data(x, y)
+                
+                # 3. Create a scatter plot object from the table
+                scatter_plot = wandb.plot.scatter(
+                    umap_table, 'umap_x', 'umap_y', title=f"UMAP Visualization (Step {self.global_step})"
+                )
+
+                # --- Reconstruction table (unchanged) ---
+                video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
+                for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
+                    video_table.add_data(as_wandb_video(cond,  "Conditioning"),
+                                        as_wandb_video(recon, "Predicted next-frame"),
+                                        as_wandb_video(gt,    "Ground-truth next-frame"))
+
+                # --- Simplified logging ---
+                if self._wandb_run:
+                    print(f"[rank {self.rank}] logging to wandb")
+                    wandb.log({
+                        "UMAP Scatter Plot": scatter_plot,
+                        "Reconstruction": video_table,
+                    }, step=self.global_step)
+
+        print(f"[rank {self.rank}] validation done")
+        barrier()
 
     @torch.no_grad()
     def validate(self) -> None:
