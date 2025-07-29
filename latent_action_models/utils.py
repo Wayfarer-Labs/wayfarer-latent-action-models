@@ -145,7 +145,7 @@ def gather_objects_to_rank(obj: object,
     • If dist not initialised: a list containing just the local `obj`.
     """
     if not (dist.is_available() and dist.is_initialized()):
-        return [obj]
+        return obj
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()

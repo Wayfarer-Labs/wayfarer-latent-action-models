@@ -8,6 +8,7 @@ import  wandb
 import  pathlib
 import  traceback
 import  dataclasses
+import  toolz
 import  einops as eo
 import  plotly.express as px
 from    torch.types import Number
@@ -262,7 +263,6 @@ class Trainer_LatentActionModel(BaseTrainer):
             all_idx_start_b     = torch.cat(all_idx_start_b_local, dim=0)
             all_idx_start_b     = gather_to_rank(all_idx_start_b, dst=0, dim=0, cat=True)
             all_paths_global    = gather_objects_to_rank(all_paths_local, dst=0)
-
             # -- reconstruction of image
             recon_videos_bnchw                      = torch.cat(recon_videos_list_bnchw, dim=0)
             lam_outputs: LatentActionModelOutput    = model.forward(recon_videos_bnchw)
