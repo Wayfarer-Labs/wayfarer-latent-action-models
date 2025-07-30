@@ -11,9 +11,10 @@ sudo apt install -y ffmpeg
 
 
 echo "Launching video loader server..."
+git submodule update --init --recursive
 python -m owl_data.video_loader_server \
     --root_dir /mnt/data/sami/1x_dataset/original/train_v2.0_raw/videos \
-    --num_workers 64 \
+    --num_workers 128 \
     --queue_max 200000 \
     --frame_skip 1 \
     --n_frames 2 \

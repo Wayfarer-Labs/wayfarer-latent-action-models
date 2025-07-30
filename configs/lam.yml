@@ -23,7 +23,7 @@ num_enc_blocks: 16               # lam_enc_blocks
 num_dec_blocks: 16               # lam_dec_blocks
 num_heads: 16                    # lam_num_heads
 dropout: 0.0
-beta: 0.004                     # KL weight
+beta: 8e-2                     # KL weight
 val_num_samples_umap: 50
 val_num_samples_recon: 5
 val_every: 250

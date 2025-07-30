@@ -70,7 +70,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
 
     @property
-    def save_path(self) -> str: return f'lam_s{self.global_step}.pt'
+    def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}.pt'
 
     def load_checkpoint(self, path: os.PathLike) -> None:
         ckpt = torch.load(path, map_location="cpu")
@@ -297,8 +297,8 @@ class Trainer_LatentActionModel(BaseTrainer):
                 if self._wandb_run:
                     print(f"[rank {self.rank}] logging to wandb")
                     wandb.log({
-                        "UMAP Scatter Plot": scatter_plot,
-                        "Reconstruction": video_table,
+                        f"UMAP Scatter Plot/{self.global_step}": scatter_plot,
+                        f"Reconstruction/{self.global_step}": video_table,
                     }, step=self.global_step)
 
         print(f"[rank {self.rank}] validation done")
