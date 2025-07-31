@@ -156,7 +156,9 @@ class Trainer_LatentActionModel(BaseTrainer):
             run_name        = self.cfg.run_name or f"LAM_{time.time():.0f}"
             self._wandb_run = wandb.init(project=self.cfg.wandb_project,
                                          name=run_name, config=dataclasses.asdict(self.cfg))
-
+            wandb.watch(self.model, log='gradients', log_freq=self.cfg.log_every * 20)
+            print(f'[rank {self.rank}] wandb initialized, watching gradients...')
+    
         mu_bn1d     = stats["mu"]
         logvar_bn1d = stats["logvar"]
 

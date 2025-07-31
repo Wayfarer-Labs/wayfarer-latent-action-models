@@ -6,7 +6,7 @@ lr: 3.0e-6                       # AdamW learning-rate
 weight_decay: 0.01
 betas: [0.9, 0.999]
 amp: true                        # mixed-precision (16-mixed)
-max_grad_norm: 1.5               # gradient-clip value
+max_grad_norm: 10.0               # gradient-clip value
 
 # -- training loop
 max_steps: 1000000
@@ -23,13 +23,13 @@ num_enc_blocks: 16               # lam_enc_blocks
 num_dec_blocks: 16               # lam_dec_blocks
 num_heads: 16                    # lam_num_heads
 dropout: 0.0
-beta: 8e-2                     # KL weight
+beta: 4e-2                     # KL weight
 val_num_samples_umap: 50
 val_num_samples_recon: 5
 val_every: 250
 
 # -- conditoning
-conditioning: 'crossattn'
+conditioning: add
 
 # -- dataset
 data:
