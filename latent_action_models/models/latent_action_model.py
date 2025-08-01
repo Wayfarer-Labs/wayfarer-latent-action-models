@@ -64,11 +64,11 @@ class LatentActionModel(nn.Module):
         self.cond_net       = nn.Identity()
         
         if self.conditioning == 'crossattn':
-            self.cond_net   = CrossAttention(num_heads  = (num_heads // 4) or 1,
+            self.cond_net   = CrossAttention(num_heads  = num_heads,
                                              d_model    = self.model_dim,
                                              **self.cond_kwargs)
         
-        nn.init.uniform_(self.action_prompt, a=-1, b=1)
+        nn.init.uniform_(self.action_prompt, -1, 1)
     
         self.encoder        = ST_Transformer(in_dim=self.patch_token_dim,
                                              model_dim=self.model_dim,
@@ -103,8 +103,8 @@ class LatentActionModel(nn.Module):
         video_patches_bnpd  = self._patchify(video_bnchw)
         actions_bn1d        = self.action_prompt.expand(B,N,-1,-1)
         # -- cat actions to video patches. p := p+1 here.
-        patches_bnpd        = torch.cat([actions_bn1d, video_patches_bnpd], dim=2)  # -- patches_bnpd is centered herer with mu=0, var=1., 
-        latents_bnpd        = self.encoder(patches_bnpd) # -- after the encoder, we get var of 700K. 
+        patches_bnpd        = torch.cat([actions_bn1d, video_patches_bnpd], dim=2)
+        latents_bnpd        = self.encoder(patches_bnpd)
 
         # -- latent action is the zero-th token between each consecutive frame,
         # so n := n-1 here.
@@ -142,10 +142,10 @@ class LatentActionModel(nn.Module):
         # -- c: model_dim, dimension of the pixel decoder (also identical to encoder dim)
         video_patches_bnpd                  = self._patchify(video_bnchw)
         prev_video_proj_patches_bnpc        = self.patch_proj(video_patches_bnpd)
-        action_proj_patches_bn1c            = self.action_proj  (action_bn1d)
+        action_proj_patches_bn1c            = self.action_proj(action_bn1d)
 
         action_conditioned_patches_bnpc     = self.condition_video_to_actions(prev_video_proj_patches_bnpc, action_proj_patches_bn1c)
-        
+
         video_reconstruction_bnpd           = self.decoder      (action_conditioned_patches_bnpc)
         video_reconstruction_bnpd           = F.sigmoid         (video_reconstruction_bnpd)
         video_reconstruction_bnchw          = self._unpatchify  (video_reconstruction_bnpd)

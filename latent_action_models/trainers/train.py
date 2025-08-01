@@ -23,7 +23,10 @@ from latent_action_models.configs                       import LatentActionModel
 from latent_action_models.trainers.base_trainer         import BaseTrainer
 from latent_action_models.action_creation.clustering    import umap_visualization
 from latent_action_models.utils                         import (
-    as_wandb_video, barrier, gather_to_rank, init_distributed, colors_labels_from_actions, get_quiver_vectors_from_actions, gather_objects_to_rank)
+    as_wandb_video, barrier, gather_to_rank,
+    init_distributed, colors_labels_from_actions,
+    get_quiver_vectors_from_actions, gather_objects_to_rank
+)
 from latent_action_models.data_exploration              import create_actions_parquet as lam_parquet
 
 
@@ -36,11 +39,11 @@ class LogStats(TypedDict):
     grad_norm:      float
     learning_rate:  float
     weight_decay:   float
+    lam_outputs:    LatentActionModelOutput
     iter_sec:       NotRequired[float]
     batch_sec:      NotRequired[float]
-    psnr:           NotRequired[Number]
-    ssim:           NotRequired[Number]
-
+    psnr:           NotRequired[Number | None]
+    ssim:           NotRequired[Number | None]
 
 def create_latent_action_model(config: LatentActionModelTrainingConfig) -> LatentActionModel:
     return LatentActionModel(
@@ -138,17 +141,20 @@ class Trainer_LatentActionModel(BaseTrainer):
                                                             'b n c h w -> (b n) c h w').clip(0, 1)
                 psnr                        = piq.psnr(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
                 ssim                        = piq.ssim(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
+            else: psnr = ssim = None
 
-            return LogStats( loss           = total_loss    .item(),
-                            kl_loss         = kl_loss       .item(), 
-                            recon_loss      = mse_loss      .item(),
-                            mu              = lam_outputs['mean_bn1d'],
-                            logvar          = lam_outputs['logvar_bn1d'],
-                            grad_norm       = grad_norm,
-                            learning_rate   = self.optimizer.param_groups[0]["lr"],
-                            weight_decay    = self.optimizer.param_groups[0]["weight_decay"],
-                            psnr            = psnr if self.should_log else None,
-                            ssim            = ssim if self.should_log else None)
+            return LogStats( loss            = total_loss    .item(),
+                             kl_loss         = kl_loss       .item(), 
+                             recon_loss      = mse_loss      .item(),
+                             mu              = lam_outputs['mean_bn1d'],
+                             logvar          = lam_outputs['logvar_bn1d'],
+                             grad_norm       = grad_norm,
+                             learning_rate   = self.optimizer.param_groups[0]["lr"],
+                             weight_decay    = self.optimizer.param_groups[0]["weight_decay"],
+                             psnr            = psnr if self.should_log else None,
+                             ssim            = ssim if self.should_log else None,
+                             lam_outputs     = lam_outputs )
+            
 
     def log_step(self, stats: LogStats) -> None:
         # -- lazy init wandb
@@ -166,7 +172,14 @@ class Trainer_LatentActionModel(BaseTrainer):
         mu_std      = mu_bn1d   .std()  .item()
         sigma       = (0.5 * logvar_bn1d).exp()
         sigma_mean  = sigma     .mean() .item()
-
+        # -- reconstruction stats
+        recon_video_bnchw   = stats['lam_outputs']["reconstructed_video_bnchw"]
+        groundtruth_bnchw   = stats['lam_outputs']['groundtruth_video_bnchw']
+        grndt_mu            = groundtruth_bnchw.mean().item()
+        grndt_std           = groundtruth_bnchw.std ().item()
+        recon_mu            = recon_video_bnchw.mean().item()
+        recon_std           = recon_video_bnchw.std ().item()
+        
         wandb_dict = {
             # -- core losses
             "loss/total":           stats["loss"],
@@ -183,9 +196,10 @@ class Trainer_LatentActionModel(BaseTrainer):
             "latent/mu_std":        mu_std,
             "latent/sigma_mean":    sigma_mean,
 
-            # -- reconstruction metrics
-            "reconstruction/psnr":  stats.get("psnr"),
-            "reconstruction/ssim":  stats.get("ssim"),
+            # -- reconstruction metrics 
+            "reconstruction-stats/psnr":   stats.get("psnr"),
+            "reconstruction-stats/ssim":   stats.get("ssim"),
+            "reconstruction-stats/img-mu": stats['lam_outputs']["reconstructed_video_bnchw"]
         }
 
         if "iter_sec" in stats:     wandb_dict["perf/iter_sec"]     = stats["iter_sec"]
@@ -262,15 +276,15 @@ class Trainer_LatentActionModel(BaseTrainer):
 
         if self._wandb_enabled:
             # -- Gather tensors from all GPUs --
-            latent_actions_bn1d = torch.cat(latent_actions_list_bn1d, dim=0)
-            latent_actions_n1d  = eo.rearrange(latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
-            latent_actions_n1d  = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
+            latent_actions_bn1d     = torch.cat(latent_actions_list_bn1d, dim=0)
+            latent_actions_n1d      = eo.rearrange(latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
+            latent_actions_n1d      = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
 
-            recon_videos_bnchw = torch.cat(recon_videos_list_bnchw, dim=0)
-            lam_outputs = model.forward(recon_videos_bnchw)
-            condition_video_bnchw = gather_to_rank(lam_outputs["condition_video_bnchw"], dst=0, dim=0, cat=True)
-            recon_video_bnchw = gather_to_rank(lam_outputs["reconstructed_video_bnchw"], dst=0, dim=0, cat=True)
-            gt_video_bnchw = gather_to_rank(lam_outputs["groundtruth_video_bnchw"], dst=0, dim=0, cat=True)
+            recon_videos_bnchw      = torch.cat(recon_videos_list_bnchw, dim=0)
+            lam_outputs             = model.forward(recon_videos_bnchw)
+            condition_video_bnchw   = gather_to_rank(lam_outputs["condition_video_bnchw"], dst=0, dim=0, cat=True)
+            recon_video_bnchw       = gather_to_rank(lam_outputs["reconstructed_video_bnchw"], dst=0, dim=0, cat=True)
+            gt_video_bnchw          = gather_to_rank(lam_outputs["groundtruth_video_bnchw"], dst=0, dim=0, cat=True)
 
             if self.rank == 0:
                 # --- SIMPLIFIED UMAP PLOTTING ---
@@ -291,9 +305,9 @@ class Trainer_LatentActionModel(BaseTrainer):
                 # --- Reconstruction table (unchanged) ---
                 video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
                 for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
-                    video_table.add_data(as_wandb_video((cond+1.)/2.,  "Conditioning"),
-                                        as_wandb_video((recon+1.)/2., "Predicted next-frame"),
-                                        as_wandb_video((gt+1.)/2.,    "Ground-truth next-frame"))
+                    video_table.add_data(as_wandb_video((cond+1.) / 2.,  "Conditioning"),
+                                         as_wandb_video(recon,      "Predicted next-frame"), # <-- this has sigmoid so its between 0 and 1, so dont normalize
+                                         as_wandb_video((gt+1.)    / 2.,    "Ground-truth next-frame"))
 
                 # --- Simplified logging ---
                 if self._wandb_run:
