@@ -9,7 +9,7 @@ amp: true                        # mixed-precision (16-mixed)
 max_grad_norm: 10.0               # gradient-clip value
 
 # -- training loop
-max_steps: 1000000
+max_steps: 100000
 log_every: 1                  # log interval
 ckpt_every: 5000                 # save interval
 
@@ -29,7 +29,7 @@ val_num_samples_recon: 5
 val_every: 250
 
 # -- conditoning
-conditioning: add
+conditioning: crossattn
 
 # -- dataset
 data:

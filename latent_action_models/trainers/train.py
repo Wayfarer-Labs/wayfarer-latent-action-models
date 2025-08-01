@@ -67,7 +67,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         latent_action_model = create_latent_action_model(config)
         *_, device = init_distributed()
         super(Trainer_LatentActionModel, self).__init__(latent_action_model, config, device=device)
-        self.beta               = 0.
+        self.beta               = config.beta
         self._wandb_run         = None
         self.debug_show_samples = 10
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
@@ -118,7 +118,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             return self.format_batch()
 
         return  (
-            video_bnchw.to(self.device),
+            (video_bnchw.to(self.device) + 1. / 2.), # -1,1 to 0, 1
             metadata
         )
 
@@ -154,7 +154,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                              psnr            = psnr if self.should_log else None,
                              ssim            = ssim if self.should_log else None,
                              lam_outputs     = lam_outputs )
-            
+
 
     def log_step(self, stats: LogStats) -> None:
         # -- lazy init wandb
@@ -305,8 +305,8 @@ class Trainer_LatentActionModel(BaseTrainer):
                 # --- Reconstruction table (unchanged) ---
                 video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
                 for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
-                    video_table.add_data(as_wandb_video((cond+1.) / 2.,  "Conditioning"),
-                                         as_wandb_video(recon,      "Predicted next-frame"), # <-- this has sigmoid so its between 0 and 1, so dont normalize
+                    video_table.add_data(as_wandb_video((cond+1.)  / 2.,  "Conditioning"),
+                                         as_wandb_video((recon+1.) / 2.,      "Predicted next-frame"), # <-- this has sigmoid so its between 0 and 1, so dont normalize
                                          as_wandb_video((gt+1.)    / 2.,    "Ground-truth next-frame"))
 
                 # --- Simplified logging ---
