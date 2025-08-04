@@ -7,16 +7,17 @@ from    typing              import Optional, Any, Literal
 from    torch.utils.data    import DataLoader, Dataset
 
 
-DatasetType = Literal["gta_4", "call_of_duty", "random"]
+DatasetType = Literal["gta_4", "call_of_duty", "random", "owl_data", "owl_data_latent"]
 
 @dataclass
 class DataConfig:
-    batch_size:          int      = 8
-    dataset_name:  DatasetType    = "gta_4"
-    resolution:          int      = 256 # TODO use this.
-    num_frames:          int      = 2
-    samples_per_epoch:   int      = 1_000_000
-    num_workers:         int      = 8
+    batch_size:             int         = 8
+    dataset_name:   DatasetType         = "gta_4"
+    resolution:             int         = 256 # TODO use this.
+    num_frames:             int         = 2
+    samples_per_epoch:      int         = 1_000_000
+    num_workers:            int         = 8
+    stride:                 int         = 1
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DataConfig:
