@@ -1,3 +1,4 @@
+from    toolz       import identity
 import  torch
 import  einops      as eo
 import  torch.nn    as nn
@@ -87,6 +88,8 @@ class LatentActionModel(nn.Module):
                                             num_blocks=num_dec_blocks,
                                             num_heads=num_heads,
                                             dropout=dropout)
+        self.on_latents     = self.in_dim > 3
+        self.normalize      = F.sigmoid if not self.on_latents else identity
 
         print(f'[LatentActionModel] model initialized with num_params={sum(p.numel() for p in self.parameters()):,}')
     
@@ -148,7 +151,7 @@ class LatentActionModel(nn.Module):
         action_conditioned_patches_bnpc     = self.condition_video_to_actions(prev_video_proj_patches_bnpc, action_proj_patches_bn1c)
 
         video_reconstruction_bnpd           = self.decoder      (action_conditioned_patches_bnpc)
-        video_reconstruction_bnpd           = F.sigmoid         (video_reconstruction_bnpd)
+        video_reconstruction_bnpd           = self.normalize    (video_reconstruction_bnpd)
         video_reconstruction_bnchw          = self._unpatchify  (video_reconstruction_bnpd)
 
         return ActionDecodingInfo(condition_video_bnchw     = video_bnchw,

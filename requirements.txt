@@ -1,3 +1,4 @@
+diffusers
 av
 multimethod
 multipledispatch
@@ -21,4 +22,5 @@ kmeans-pytorch
 --extra-index-url https://pypi.nvidia.com
 nvidia-dali-cuda120
 ffmpeg-python
+rotary_embedding_torch
 -e .

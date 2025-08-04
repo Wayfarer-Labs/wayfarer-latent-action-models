@@ -2,5 +2,5 @@
 	path = owl-data-2
 	url = git@github.com:Wayfarer-Labs/owl-data-2.git
 [submodule "owl-vaes"]
-	path = owl-vaes
+	path = owl_vaes
 	url = git@github.com:Wayfarer-Labs/owl-vaes.git

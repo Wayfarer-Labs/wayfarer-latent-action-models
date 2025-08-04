@@ -18,7 +18,7 @@ video_dims: [256, 256]           # H, W
 in_dim: 3                        # image_channels
 model_dim: 1024                  # lam_model_dim
 vae_dim: 32                      # lam_latent_dim
-patch_size: 16                   # lam_patch_size
+patch_size: 1                   # lam_patch_size
 num_enc_blocks: 16               # lam_enc_blocks
 num_dec_blocks: 16               # lam_dec_blocks
 num_heads: 16                    # lam_num_heads
@@ -34,7 +34,7 @@ conditioning: add
 # -- dataset
 data:
   batch_size: 60                 # keep in sync with trainer batch_size
-  dataset_name: owl_data_latent
+  dataset_name: owl_data
   num_frames: 2
   resolution: 256
   samples_per_epoch: 100000

@@ -14,7 +14,9 @@ from    latent_action_models.datasets.robotics_1x_dataset           import Robot
 from    latent_action_models.datasets.video_loader                  import VideoServerIterableDataset,  video_collate_fn
 from    latent_action_models.datasets.latent_loader                 import LatentIterableDataset,       latent_collate_fn
 
+
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' 
+
 
 class RandomDataset(Dataset):
     def __init__(self, config: DataConfig) -> None:
