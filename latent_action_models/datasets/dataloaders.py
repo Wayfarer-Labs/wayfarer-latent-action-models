@@ -69,7 +69,7 @@ def _dataset(dataset: Literal["owl_data"], config: DataConfig, rank: int = 0, wo
 
 @multimethod
 def _dataset(dataset: Literal["owl_data_latent"], config: DataConfig, rank: int = 0, world: int = 1) -> IterableDataset:
-    return LatentIterableDataset(num_frames=config.num_frames)
+    return LatentIterableDataset(num_frames=config.num_frames, stride=config.stride)
 
 
 def create_dataloader(config: DataConfig) -> DataLoader:
