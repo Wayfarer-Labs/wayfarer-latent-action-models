@@ -118,7 +118,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             return self.format_batch()
 
         return  (
-            (video_bnchw.to(self.device) + 1. / 2.), # -1,1 to 0, 1
+            (video_bnchw.to(self.device) + 1.) / 2., # -1,1 to 0, 1
             metadata
         )
 

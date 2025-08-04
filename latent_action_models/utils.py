@@ -28,10 +28,10 @@ def patchify(videos_bnchw: Tensor, size: int) -> Tensor:
 def unpatchify(patches_bnpd: Tensor, size: int, h_out: int, w_out: int) -> Tensor:
     h_pad       = -h_out % size
     hn          = (h_out + h_pad) // size
-    video_bnhwc = eo.rearrange(patches_bnpd,
+    video_bnchw = eo.rearrange(patches_bnpd,
                             "b t (hn wn) (hp wp c) -> b t c (hn hp) (wn wp)",
                             hp=size, wp=size, hn=hn)
-    return video_bnhwc[:,:,:h_out, :w_out]
+    return video_bnchw[:,:,:,:h_out, :w_out]
  
 
 def init_distributed() -> tuple[int, int, torch.device]:

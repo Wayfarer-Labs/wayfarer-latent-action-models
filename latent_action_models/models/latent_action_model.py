@@ -126,7 +126,8 @@ class LatentActionModel(nn.Module):
     def condition_video_to_actions(self,
                                    video_patches_bnpd:  Tensor,
                                    action_proj_bn1c:    Tensor) -> Tensor:
-        if self.conditioning == 'add':          return video_patches_bnpd + action_proj_bn1c
+        if self.conditioning == 'add':
+            return video_patches_bnpd + action_proj_bn1c
         if self.conditioning == 'crossattn':
             B,N,P,D                 = video_patches_bnpd.shape
             conditional_video_bpd   = self.cond_net(eo.rearrange(video_patches_bnpd,    'b n p d -> b (n p) d'),
