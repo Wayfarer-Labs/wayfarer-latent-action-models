@@ -11,7 +11,8 @@ from    latent_action_models.datasets.clip_metadata_generator       import _data
 from    latent_action_models.utils                                  import init_distributed
 from    latent_action_models.datasets.decord_dataset                import DecordVideoDataset
 from    latent_action_models.datasets.robotics_1x_dataset           import Robotics_1X_Dataset
-from    latent_action_models.datasets.video_loader                  import VideoServerIterableDataset, video_collate_fn
+from    latent_action_models.datasets.video_loader                  import VideoServerIterableDataset,  video_collate_fn
+from    latent_action_models.datasets.latent_loader                 import LatentIterableDataset,       latent_collate_fn
 
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' 
 
@@ -66,14 +67,23 @@ def _dataset(dataset: Literal["owl_data"], config: DataConfig, rank: int = 0, wo
     return VideoServerIterableDataset(shuffle_buffer=64, num_workers=64)
 
 
+@multimethod
+def _dataset(dataset: Literal["owl_data_latent"], config: DataConfig, rank: int = 0, world: int = 1) -> IterableDataset:
+    return LatentIterableDataset(num_frames=config.num_frames)
+
+
 def create_dataloader(config: DataConfig) -> DataLoader:
     rank, world, _  = init_distributed()
     dataset         = _dataset(config.dataset_name, config, rank, world)
+    collate_fn      = None
+    if config.dataset_name == "owl_data":           collate_fn = video_collate_fn
+    if config.dataset_name == "owl_data_latent":    collate_fn = latent_collate_fn
+
     return DataLoader(
         dataset,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
-        collate_fn=video_collate_fn if config.dataset_name == "owl_data" else None,
+        collate_fn=collate_fn
     )
 
 

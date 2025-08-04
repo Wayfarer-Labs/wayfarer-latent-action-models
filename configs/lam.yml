@@ -34,7 +34,7 @@ conditioning: add
 # -- dataset
 data:
   batch_size: 60                 # keep in sync with trainer batch_size
-  dataset_name: owl_data
+  dataset_name: owl_data_latent
   num_frames: 2
   resolution: 256
   samples_per_epoch: 100000

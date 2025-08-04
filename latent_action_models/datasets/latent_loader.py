@@ -67,7 +67,7 @@ class LatentIterableDataset(IterableDataset):
                 traceback.print_exc() ; continue
 
 
-def video_collate_fn(batch: list[tuple[Tensor, dict]]) -> tuple[Tensor, tuple[dict, ...]]:
+def latent_collate_fn(batch: list[tuple[Tensor, dict]]) -> tuple[Tensor, tuple[dict, ...]]:
     latents, metadata = zip(*batch)
     return torch.stack(latents, dim=0), metadata
 
@@ -75,8 +75,8 @@ def video_collate_fn(batch: list[tuple[Tensor, dict]]) -> tuple[Tensor, tuple[di
 
 if __name__ == "__main__":
     import time
-    dataset = LatentIterableDataset()
-    dataloader = DataLoader(dataset, batch_size=64, collate_fn=video_collate_fn, num_workers=64)
+    dataset = LatentIterableDataset(stride = 4)
+    dataloader = DataLoader(dataset, batch_size=64, collate_fn=latent_collate_fn, num_workers=64)
 
     print("Testing VideoServerIterableDataset DataLoader...")
     t0 = time.time()
