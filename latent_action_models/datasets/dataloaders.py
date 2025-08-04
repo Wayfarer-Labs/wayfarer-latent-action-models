@@ -75,14 +75,19 @@ def _dataset(dataset: Literal["owl_data_latent"], config: DataConfig, rank: int 
 def create_dataloader(config: DataConfig) -> DataLoader:
     rank, world, _  = init_distributed()
     dataset         = _dataset(config.dataset_name, config, rank, world)
+
     collate_fn      = None
     if config.dataset_name == "owl_data":           collate_fn = video_collate_fn
     if config.dataset_name == "owl_data_latent":    collate_fn = latent_collate_fn
 
+    num_workers = config.num_workers
+    if config.dataset_name == "owl_data":
+        num_workers = 0
+
     return DataLoader(
         dataset,
         batch_size=config.batch_size,
-        num_workers=config.num_workers,
+        num_workers=num_workers,
         collate_fn=collate_fn
     )
 
