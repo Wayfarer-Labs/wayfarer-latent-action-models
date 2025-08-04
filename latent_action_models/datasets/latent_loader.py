@@ -83,6 +83,6 @@ if __name__ == "__main__":
     for i, (videos, metadatas) in enumerate(dataloader):
         print(f"Batch {i}: videos.shape={videos.shape}, min={videos.min().item():.3f}, max={videos.max().item():.3f}, mean={videos.mean().item():.3f}")
         #print(f"Metadata[0]: {metadatas[0]}")
-        if i >= 10:
+        if i >= 6400:
             break
     print(f"Done. Time elapsed: {time.time() - t0:.2f}s")
