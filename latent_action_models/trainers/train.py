@@ -33,11 +33,13 @@ from latent_action_models.vae_bridge.owl_vae_bridge     import R3DCDecodingPipel
 
 
 class LogStats(TypedDict):
-    loss:           float
-    kl_loss:        float
-    recon_loss:     float
+    loss:           Tensor
+    kl_loss:        Tensor
+    recon_loss:     Tensor
+    baseline_loss:  Tensor
     mu:             Tensor
     logvar:         Tensor
+    beta:           float
     grad_norm:      float
     learning_rate:  float
     weight_decay:   float
@@ -61,23 +63,27 @@ def create_latent_action_model(config: LatentActionModelTrainingConfig) -> Laten
         conditioning    = config.conditioning
     )
 
-def kl_divergence(mean: Tensor, logvar: Tensor) -> Tensor:
-    return -0.5 * torch.sum(1 + logvar - mean ** 2 - logvar.exp(), dim=1).mean()
+
+def kl_divergence(mean_bn1d: Tensor, logvar_bn1d: Tensor) -> Tensor:
+    kl_elem_bn1d = 0.5 * (mean_bn1d.pow(2) + logvar_bn1d.exp() - 1.0 - logvar_bn1d)
+    kl_total_b1  = kl_elem_bn1d.sum(dim=(1,3))
+    return kl_total_b1.mean()
+
 
 class Trainer_LatentActionModel(BaseTrainer):
     def __init__(self, config: LatentActionModelTrainingConfig) -> None:
         latent_action_model = create_latent_action_model(config)
         *_, device = init_distributed()
         super(Trainer_LatentActionModel, self).__init__(latent_action_model, config, device=device)
-        self.beta               = config.beta
+        self.beta_scheduler     = config.beta_scheduler_linear_warmup()
         self._wandb_run         = None
-        self.debug_show_samples = 10
+        self.debug_show_samples = 0
         self.on_latents         = config.data_config.dataset_name == 'owl_data_latent'
         self.decoder            = R3DCDecodingPipeline() if self.on_latents else None
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
 
     @property
-    def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}.pt'
+    def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}.pt'
 
     def load_checkpoint(self, path: os.PathLike) -> None:
         ckpt = torch.load(path, map_location="cpu")
@@ -134,14 +140,20 @@ class Trainer_LatentActionModel(BaseTrainer):
 
     def train_step(self, video_bnchw: Tensor) -> LogStats:
         with self.amp_ctx():
-            future_frame_video_bnchw             = video_bnchw[:, 1:]
             lam_outputs: LatentActionModelOutput = self.model(video_bnchw)
+            future_frame_video_bnchw             = lam_outputs['next_state_video_bnchw']
             reconstructed_frames_bnchw           = lam_outputs['reconstructed_video_bnchw']
+            condition_video_bnchw                = lam_outputs['condition_video_bnchw']
 
-            mse_loss    = F.mse_loss(reconstructed_frames_bnchw, future_frame_video_bnchw)
-            kl_loss     = kl_divergence(lam_outputs['mean_bn1d'], lam_outputs['logvar_bn1d'])
-            total_loss  = mse_loss + (self.beta * kl_loss)
-            grad_norm   = self.optim_step(total_loss)
+            # -- loss showing how bad we'd be if we memorize the conditioning
+            with torch.no_grad():
+                baseline_loss = F.mse_loss(condition_video_bnchw, future_frame_video_bnchw)
+
+            mse_loss        = F.mse_loss(reconstructed_frames_bnchw, future_frame_video_bnchw)
+            kl_loss         = kl_divergence(lam_outputs['mean_bn1d'], lam_outputs['logvar_bn1d'])
+            beta            = next(self.beta_scheduler)
+            total_loss      = mse_loss + (beta * kl_loss)
+            grad_norm       = self.optim_step(total_loss)
 
             if self.should_log:
                 reconstructed_frames_nchw   = eo.rearrange(lam_outputs['reconstructed_video_bnchw'],
@@ -153,11 +165,13 @@ class Trainer_LatentActionModel(BaseTrainer):
                 else:               ssim    = piq.ssim(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
             else: psnr = ssim = None
 
-            return LogStats( loss            = total_loss    .item(),
-                             kl_loss         = kl_loss       .item(), 
-                             recon_loss      = mse_loss      .item(),
+            return LogStats( loss            = total_loss,
+                             kl_loss         = kl_loss, 
+                             recon_loss      = mse_loss,
+                             baseline_loss   = baseline_loss,
                              mu              = lam_outputs['mean_bn1d'],
                              logvar          = lam_outputs['logvar_bn1d'],
+                             beta            = beta,
                              grad_norm       = grad_norm,
                              learning_rate   = self.optimizer.param_groups[0]["lr"],
                              weight_decay    = self.optimizer.param_groups[0]["weight_decay"],
@@ -185,9 +199,10 @@ class Trainer_LatentActionModel(BaseTrainer):
 
         wandb_dict = {
             # -- core losses
-            "loss/total":           stats["loss"],
-            "loss/recon":           stats["recon_loss"],
-            "loss/kl":              stats["kl_loss"],
+            "loss/total":           stats["loss"].item(),
+            "loss/recon":           stats["recon_loss"].item(),
+            "loss/kl":              stats["kl_loss"].item(),
+            "loss/beta":            stats["beta"],
         
             # -- optimisation
             "optim/grad_norm":      stats["grad_norm"],
@@ -288,7 +303,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             lam_outputs             = model.forward(recon_videos_bnchw.float())  # why do we cast here? idfk
             condition_video_bnchw   = gather_to_rank(lam_outputs["condition_video_bnchw"], dst=0, dim=0, cat=True)
             recon_video_bnchw       = gather_to_rank(lam_outputs["reconstructed_video_bnchw"], dst=0, dim=0, cat=True)
-            gt_video_bnchw          = gather_to_rank(lam_outputs["groundtruth_video_bnchw"], dst=0, dim=0, cat=True)
+            gt_video_bnchw          = gather_to_rank(lam_outputs["next_state_video_bnchw"], dst=0, dim=0, cat=True)
 
             if self.rank == 0:
                 # --- SIMPLIFIED UMAP PLOTTING ---
@@ -307,7 +322,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                 )
 
                 # --- Reconstruction table (unchanged) ---
-                video_table = wandb.Table(columns=["conditioning", "predicted", "ground_truth"])
+                video_table = wandb.Table(columns=["cond | pred next | next"])
                 # -- decode into pixels if we are using latents
                 if self.on_latents:
                     condition_video_nchw    = F.sigmoid(self.decoder(eo.rearrange(condition_video_bnchw,   'b n c h w -> (b n) c h w').bfloat16()))
@@ -319,9 +334,8 @@ class Trainer_LatentActionModel(BaseTrainer):
             
                 # -- add reconstructions 
                 for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
-                    video_table.add_data(as_wandb_video(cond,  "Conditioning"),
-                                         as_wandb_video(recon, "Predicted next-frame"),
-                                         as_wandb_video(gt,    "Ground-truth next-frame"))
+                    frame_cond_recon_gt = torch.cat([cond, recon, gt], dim=-1)
+                    video_table.add_data(as_wandb_video(frame_cond_recon_gt, "Conditioning | Predicted next-frame | Next-frame"))
 
                 # --- Simplified logging ---
                 if self._wandb_run:

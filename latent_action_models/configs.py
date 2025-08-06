@@ -1,9 +1,10 @@
 from __future__ import annotations
 import  yaml
 import  pathlib
+import  itertools
 import  dataclasses
 from    dataclasses         import dataclass, field, asdict
-from    typing              import Optional, Any, Literal
+from    typing              import Optional, Any, Literal, Generator
 from    torch.utils.data    import DataLoader, Dataset
 
 
@@ -70,9 +71,11 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     num_heads:       int                = 4
     dropout:         float              = 0.0
 
-    beta:            float              = 0.0    # KL weight
-    val_num_samples_umap:   int         = 1000
-    val_num_samples_recon:  int         = 5
+    beta:                   float               = 0.0    # KL weight
+    beta_start:             Optional[float]     = None
+    beta_step_percent:      float               = 0.0
+    val_num_samples_umap:   int                 = 1000
+    val_num_samples_recon:  int                 = 5 
 
     conditioning: Literal['add', 'crossattn'] = 'add'
     conditioning_kwargs: dict           = field(default_factory=dict)
@@ -99,6 +102,15 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
 
         return cls(**init_kw)
 
+    def beta_scheduler_linear_warmup(self) -> Generator[float, None, None]:
+        steps = int(self.max_steps * (self.beta_step_percent or 1.0))
+        if self.beta_start is not None and steps > 0:
+            yield from (
+                self.beta_start + (self.beta-self.beta_start) * ((i+1) / steps)
+                for i in range(steps)
+            )
+        # -- hold at final value
+        yield from itertools.repeat(self.beta)
 
     def __repr__(self) -> str:
         parts = [f"{k}={v!r}" for k, v in asdict(self).items() if k != "data"]

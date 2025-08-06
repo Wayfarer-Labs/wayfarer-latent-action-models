@@ -25,7 +25,7 @@ class ActionDecodingInfo(TypedDict):
 
 class LatentActionModelOutput(TypedDict):
     # -- populated during inference: groundtruth next-state
-    groundtruth_video_bnchw:    Tensor
+    next_state_video_bnchw:     Tensor
     # -- encoding
     action_bn1d:                Tensor
     mean_bn1d:                  Tensor
@@ -159,13 +159,13 @@ class LatentActionModel(nn.Module):
 
     def forward(self, video_bnchw: Tensor) -> LatentActionModelOutput:
         action_info:         ActionEncodingInfo = self.encode_to_actions(video_bnchw)
-        groundtruth_video_bnchw                 = video_bnchw[:,:-1,::]
-        reconstruction_info: ActionDecodingInfo = self.decode_to_frame  (groundtruth_video_bnchw,
+        condition_video_bnchw                   = video_bnchw[:,:-1,::]
+        reconstruction_info: ActionDecodingInfo = self.decode_to_frame  (condition_video_bnchw,
                                                                          action_info['action_bn1d'])
 
-        return LatentActionModelOutput(groundtruth_video_bnchw = groundtruth_video_bnchw,
+        return LatentActionModelOutput( next_state_video_bnchw = video_bnchw[:,1:,::],
                                         **action_info,
-                                        **reconstruction_info)
+                                        **reconstruction_info )
 
 if __name__ == '__main__':
     video_bnchw = torch.randn(4, 32, 3, 224, 224)

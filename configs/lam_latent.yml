@@ -2,8 +2,8 @@ ckpt_dir: /mnt/data/sami/checkpoints/lam  # where checkpoints go
 resume_checkpoint: null                   # path to *.pt to resume from (or null)
 
 # -- optimizer
-lr: 4.2e-6                       # AdamW learning-rate
-weight_decay: 0.01
+lr: 1.5e-6                       # AdamW learning-rate
+weight_decay: 0.001
 betas: [0.9, 0.999]
 amp: true                        # mixed-precision (16-mixed)
 max_grad_norm: 5.0               # gradient-clip value
@@ -20,15 +20,17 @@ model_dim: 512                  # lam_model_dim
 vae_dim: 32                      # lam_latent_dim
 patch_size: 1                   # lam_patch_size
 num_enc_blocks: 8               # lam_enc_blocks
-num_dec_blocks: 16               # lam_dec_blocks
+num_dec_blocks: 8               # lam_dec_blocks
 num_heads: 16                    # lam_num_heads
 dropout: 0.0
-beta: 2.0e-4                     # KL weight
+beta_start: 0.0
+beta: 4.0e-4                     # KL weight
+beta_step_percent: 0.1
 val_num_samples_umap: 50
 val_num_samples_recon: 5
-val_every: 1000
+val_every: 5000
 
-# -- conditoning
+# -- conditoning: add or crossattn
 conditioning: add
 
 # -- dataset
@@ -38,5 +40,5 @@ data:
   num_frames: 2
   resolution: 256
   samples_per_epoch: 100000
-  num_workers: 8
-  stride: 6
+  num_workers: 64
+  stride: 1
