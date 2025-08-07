@@ -4,9 +4,11 @@ import  time
 import  polars as pl
 import  torch
 import  pandas as pd
+from torch._dynamo.eval_frame import null_context
 import  wandb
 import  pathlib
 import  traceback
+from    contextlib import nullcontext
 import  dataclasses
 from    toolz import identity
 import  einops as eo
@@ -16,7 +18,7 @@ from    torch       import Tensor
 import  torch.nn.functional as F
 import  plotly.figure_factory as ff
 import  plotly.graph_objects as go
-from    typing      import TypedDict, NotRequired
+from    typing      import TypedDict, NotRequired, Literal
 
 from latent_action_models.datasets.video_loader import video_collate_fn
 from latent_action_models.models.latent_action_model    import ActionEncodingInfo, LatentActionModel, LatentActionModelOutput
@@ -37,6 +39,7 @@ class LogStats(TypedDict):
     kl_loss:        Tensor
     recon_loss:     Tensor
     baseline_loss:  Tensor
+    condition_loss: Tensor
     mu:             Tensor
     logvar:         Tensor
     beta:           float
@@ -46,6 +49,7 @@ class LogStats(TypedDict):
     lam_outputs:    LatentActionModelOutput
     iter_sec:       NotRequired[float]
     batch_sec:      NotRequired[float]
+    rho:            NotRequired[Tensor | None]
     psnr:           NotRequired[Number | None]
     ssim:           NotRequired[Number | None]
 
@@ -60,7 +64,9 @@ def create_latent_action_model(config: LatentActionModelTrainingConfig) -> Laten
         num_dec_blocks  = config.num_dec_blocks,
         num_heads       = config.num_heads,
         dropout         = config.dropout,
-        conditioning    = config.conditioning
+        conditioning    = config.conditioning,
+        conditioning_kwargs = config.conditioning_kwargs,
+        total_steps         = config.max_steps
     )
 
 
@@ -81,6 +87,8 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.on_latents         = config.data_config.dataset_name == 'owl_data_latent'
         self.decoder            = R3DCDecodingPipeline() if self.on_latents else None
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
+        self.loss_variant: Literal['residual', 'reconstruction'] = self.cfg.loss_variant
+        self.conditioning_type: Literal['add', 'crossattn', 'gated_crossattn'] = self.cfg.conditioning
 
     @property
     def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}.pt'
@@ -137,19 +145,31 @@ class Trainer_LatentActionModel(BaseTrainer):
             metadata
         )
 
+    def reconstruction_loss(self, lam_outputs: LatentActionModelOutput, as_baseline: bool = False, as_condition: bool = False) -> Tensor:
+        # -- as_baseline:   get the mse between condition and target, as the loss when learning the identity function
+        # -- as_condition:  get the mse between the condition and prediction, which shows how close we are to the condition.
+        # very similar to as_baseline except one is an upper bound on meaningful loss and the other will tend to 0 if the condition is memorized
+        assert not (as_baseline and as_condition)
+        with torch.set_grad_enabled(not as_baseline and not as_condition):
+            condition   = lam_outputs['condition_video_bnchw']
+            prediction  = lam_outputs['reconstructed_video_bnchw'] if not as_baseline   else condition
+            target      = lam_outputs['next_state_video_bnchw']    if not as_condition  else condition
+
+            if self.loss_variant == 'residual':
+                return F.mse_loss(prediction - condition, target - condition)
+            if self.loss_variant == 'reconstruction':
+                return F.mse_loss(prediction, target)
+            
+            raise NotImplementedError(f'{self.loss_variant=}')
 
     def train_step(self, video_bnchw: Tensor) -> LogStats:
         with self.amp_ctx():
             lam_outputs: LatentActionModelOutput = self.model(video_bnchw)
-            future_frame_video_bnchw             = lam_outputs['next_state_video_bnchw']
-            reconstructed_frames_bnchw           = lam_outputs['reconstructed_video_bnchw']
-            condition_video_bnchw                = lam_outputs['condition_video_bnchw']
 
             # -- loss showing how bad we'd be if we memorize the conditioning
-            with torch.no_grad():
-                baseline_loss = F.mse_loss(condition_video_bnchw, future_frame_video_bnchw)
-
-            mse_loss        = F.mse_loss(reconstructed_frames_bnchw, future_frame_video_bnchw)
+            baseline_loss   = self.reconstruction_loss(lam_outputs, as_baseline=True)
+            condition_loss  = self.reconstruction_loss(lam_outputs, as_condition=True)
+            mse_loss        = self.reconstruction_loss(lam_outputs, as_baseline=False, as_condition=False)
             kl_loss         = kl_divergence(lam_outputs['mean_bn1d'], lam_outputs['logvar_bn1d'])
             beta            = next(self.beta_scheduler)
             total_loss      = mse_loss + (beta * kl_loss)
@@ -158,7 +178,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             if self.should_log:
                 reconstructed_frames_nchw   = eo.rearrange(lam_outputs['reconstructed_video_bnchw'],
                                                             'b n c h w -> (b n) c h w').clip(0, 1)
-                future_frame_video_nchw     = eo.rearrange(future_frame_video_bnchw,
+                future_frame_video_nchw     = eo.rearrange(lam_outputs['next_state_video_bnchw'],
                                                             'b n c h w -> (b n) c h w').clip(0, 1)
                 psnr                        = piq.psnr(reconstructed_frames_nchw, future_frame_video_nchw).mean().item()
                 if self.on_latents: ssim    = None
@@ -169,6 +189,8 @@ class Trainer_LatentActionModel(BaseTrainer):
                              kl_loss         = kl_loss, 
                              recon_loss      = mse_loss,
                              baseline_loss   = baseline_loss,
+                             condition_loss  = condition_loss,
+                             rho             = self.model.cond_net.rho if self.conditioning_type == 'gated_crossattn' else None,
                              mu              = lam_outputs['mean_bn1d'],
                              logvar          = lam_outputs['logvar_bn1d'],
                              beta            = beta,
@@ -196,13 +218,17 @@ class Trainer_LatentActionModel(BaseTrainer):
         mu_std      = mu_bn1d   .std()  .item()
         sigma       = (0.5 * logvar_bn1d).exp()
         sigma_mean  = sigma     .mean() .item()
+        rho         = stats["rho"] and stats["rho"].detach().item()
 
         wandb_dict = {
             # -- core losses
             "loss/total":           stats["loss"].item(),
-            "loss/recon":           stats["recon_loss"].item(),
+            "loss/recon":           stats["recon_loss"].item(), # prev to next
             "loss/kl":              stats["kl_loss"].item(),
             "loss/beta":            stats["beta"],
+            "loss/next_to_prev":    stats["baseline_loss"].item(),
+            "loss/pred_to_prev":    stats["condition_loss"].item(),
+            "loss/rho":             rho,
         
             # -- optimisation
             "optim/grad_norm":      stats["grad_norm"],
@@ -256,6 +282,7 @@ class Trainer_LatentActionModel(BaseTrainer):
                 self.debug_show_samples -= 1
             
             self.global_step     += 1 ; self.commit_log() # -- only commit when all logs are written so we keep global-step monotonic invariant
+            self.model.bump_step()
             print(f"[rank {self.rank}] training step done {self.global_step}")
 
         self.save_checkpoint(self.ckpt_dir / self.save_path)
@@ -324,6 +351,9 @@ class Trainer_LatentActionModel(BaseTrainer):
                 # --- Reconstruction table (unchanged) ---
                 video_table = wandb.Table(columns=["cond | pred next | next"])
                 # -- decode into pixels if we are using latents
+                if self.loss_variant == 'residual':
+                    recon_video_bnchw += condition_video_bnchw
+
                 if self.on_latents:
                     condition_video_nchw    = F.sigmoid(self.decoder(eo.rearrange(condition_video_bnchw,   'b n c h w -> (b n) c h w').bfloat16()))
                     recon_video_nchw        = F.sigmoid(self.decoder(eo.rearrange(recon_video_bnchw,       'b n c h w -> (b n) c h w').bfloat16()))

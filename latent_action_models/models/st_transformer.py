@@ -24,6 +24,35 @@ class PositionalEncoding(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         return x + self.pos_enc[:x.shape[2]].to(x.device)
 
+
+class GatedCrossAttention(nn.Module):
+    def __init__(self,
+                 num_heads: int,
+                 d_model:  int,
+                 g0: float = 0.05,
+                 freeze_steps: int = 3000,
+                 **cross_kwargs):
+        super().__init__()
+        self.cross = CrossAttention(num_heads, d_model, **cross_kwargs)
+        self.rho   = nn.Parameter(torch.tensor(g0))  # learnable gate
+        self.freeze_steps = freeze_steps
+        self.rho.requires_grad_(False)               # frozen at first
+
+    def forward(self,
+                video_patches_bpd: Tensor,
+                action_proj_bnc:  Tensor,
+                step:             int) -> Tensor:
+        
+        delta = self.cross(video_patches_bpd, action_proj_bnc)    # motion features
+        
+        if step >= self.freeze_steps: self.rho.requires_grad_(True)
+        
+        g = self.rho if self.rho.requires_grad else self.rho.detach()
+
+        return video_patches_bpd + g * delta
+
+
+
 class CrossAttention(nn.Module):
     def __init__(
         self,

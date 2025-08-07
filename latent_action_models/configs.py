@@ -77,8 +77,9 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     val_num_samples_umap:   int                 = 1000
     val_num_samples_recon:  int                 = 5 
 
-    conditioning: Literal['add', 'crossattn'] = 'add'
-    conditioning_kwargs: dict           = field(default_factory=dict)
+    conditioning: Literal['add', 'crossattn', 'gated_crossattn'] = 'add'
+    conditioning_kwargs: dict = field(default_factory=dict)
+    loss_variant: Literal['reconstruction', 'residual'] = 'reconstruction'
 
     @classmethod
     def from_yaml(cls, yaml_path: str | pathlib.Path) -> LatentActionModelTrainingConfig:

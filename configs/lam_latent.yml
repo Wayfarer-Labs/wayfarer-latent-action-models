@@ -23,15 +23,20 @@ num_enc_blocks: 8               # lam_enc_blocks
 num_dec_blocks: 8               # lam_dec_blocks
 num_heads: 16                    # lam_num_heads
 dropout: 0.0
-beta_start: 0.0
+beta_start: null
 beta: 4.0e-4                     # KL weight
-beta_step_percent: 0.1
+beta_step_percent: null
 val_num_samples_umap: 50
 val_num_samples_recon: 5
 val_every: 5000
 
-# -- conditoning: add or crossattn
-conditioning: add
+# -- conditoning: add or crossattn or gated_crossattn
+conditioning: gated_crossattn
+conditioning_kwargs:
+  freeze_steps_pct: 0.03
+  init_gate: 0.05
+# -- whether the decoder outputs the difference between frames or the new frame itself
+loss_variant: reconstruction
 
 # -- dataset
 data:
@@ -41,4 +46,4 @@ data:
   resolution: 256
   samples_per_epoch: 100000
   num_workers: 64
-  stride: 1
+  stride: 6

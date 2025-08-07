@@ -9,6 +9,7 @@ from    typing      import TypedDict, Literal, Any
 from    latent_action_models.models.st_transformer import (
     S_Transformer,
     ST_Transformer,
+    GatedCrossAttention,
     CrossAttention  # action conditioning  
 )
 import  latent_action_models.utils as utils
@@ -46,8 +47,9 @@ class LatentActionModel(nn.Module):
                  num_dec_blocks:        int,
                  num_heads:             int,
                  dropout:               float = 0.0,
-                 conditioning:          Literal['add', 'crossattn'] = 'add',
-                 conditioning_kwargs:   dict[str, Any]              = {}):
+                 conditioning:          Literal['add', 'crossattn', 'gated_crossattn'] = 'add',
+                 conditioning_kwargs:   dict[str, Any] = {},
+                 total_steps:           int = 100_000):
 
         super(LatentActionModel, self).__init__()
         self.in_dim     = in_dim
@@ -60,6 +62,7 @@ class LatentActionModel(nn.Module):
 
         self.action_prompt  = nn.Parameter(torch.empty(1,1,1, self.patch_token_dim))
         # -- how the video and actions get mixed together
+        self.register_buffer('_step', torch.tensor(0, dtype=torch.long), persistent=True)
         self.conditioning   = conditioning
         self.cond_kwargs    = conditioning_kwargs
         self.cond_net       = nn.Identity()
@@ -68,6 +71,12 @@ class LatentActionModel(nn.Module):
             self.cond_net   = CrossAttention(num_heads  = num_heads,
                                              d_model    = self.model_dim,
                                              **self.cond_kwargs)
+
+        if self.conditioning == 'gated_crossattn':
+            self.cond_net   = GatedCrossAttention(num_heads     = num_heads,
+                                                  d_model       = self.model_dim,
+                                                  g0            = self.cond_kwargs['init_gate'],
+                                                  freeze_steps  = int(self.cond_kwargs['freeze_steps_pct'] * total_steps))
         
         nn.init.uniform_(self.action_prompt, -1, 1)
     
@@ -93,7 +102,17 @@ class LatentActionModel(nn.Module):
 
         print(f'[LatentActionModel] model initialized with num_params={sum(p.numel() for p in self.parameters()):,}')
     
-    
+    @property
+    def step(self) -> int: return int(self._step.item())
+
+    @property
+    def rho(self) -> Tensor:
+        if self.conditioning == 'gated_crossattn':
+            return self.cond_net.rho
+        return None
+
+    def bump_step(self): self._step += 1
+
     def _patchify(self, video_bnchw: Tensor) -> Tensor:
         return utils.patchify(video_bnchw, size=self.patch_size)
 
@@ -137,6 +156,16 @@ class LatentActionModel(nn.Module):
                                                     eo.rearrange(action_proj_bn1c,      'b n 1 c -> b (n 1) c'))
             conditional_video_bnpd  = eo.rearrange(conditional_video_bpd, 'b (n p) d -> b n p d', n=N, p=P)
             return conditional_video_bnpd
+        if self.conditioning == 'gated_crossattn':
+            B,N,P,D                 = video_patches_bnpd.shape
+            conditional_video_bpd   = self.cond_net.forward(
+                eo.rearrange(video_patches_bnpd,    'b n p d -> b (n p) d'),
+                eo.rearrange(action_proj_bn1c,      'b n 1 c -> b (n 1) c'),
+                step=self.step)
+            conditional_video_bnpd  = eo.rearrange(conditional_video_bpd, 'b (n p) d -> b n p d', n=N, p=P)
+            return conditional_video_bnpd
+        
+        raise ValueError(f'Unknown conditioning type: {self.conditioning}')
 
     def decode_to_frame(self,
                         video_bnchw: Tensor,
