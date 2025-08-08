@@ -127,14 +127,20 @@ class Trainer_LatentActionModel(BaseTrainer):
         print(f"[rank {self.rank}] checkpoint saved to {path}")
 
 
-    def format_batch(self) -> tuple[Tensor, dict]:
+    def format_batch(self, long_batch: bool = False) -> tuple[Tensor, dict]:
+        loader = self.iter_loader if not long_batch else self.iter_long_loader
         try:
-            video_bnchw, metadata = next(self.iter_loader)
-        except  StopIteration: self.iter_loader         = iter(self.dataloader) ; return self.format_batch()
+            video_bnchw, metadata = next(loader)
+        except  StopIteration:
+            if long_batch:  self.iter_long_loader   = iter(self.long_dataloader)
+            else:           self.iter_loader        = iter(self.iter_loader)
+            return self.format_batch(long_batch=long_batch)
         except  Exception as e:
-            print(f"[rank {self.rank}] error in format_batch: {e}") ; traceback.print_exc()
-            return self.format_batch()
+            print(f"[rank {self.rank}] error in format_batch({long_batch=}): {e}") ; traceback.print_exc()
+            return self.format_batch(long_batch=long_batch)
+        
         video_bnchw = video_bnchw.to(self.device) 
+
         if self.on_latents:
             video_bnchw = video_bnchw
         else:
@@ -353,11 +359,28 @@ class Trainer_LatentActionModel(BaseTrainer):
                 # -- decode into pixels if we are using latents
                 if self.loss_variant == 'residual':
                     recon_video_bnchw += condition_video_bnchw
+                
+                
+                rollout_video_GT_bnchw, _   = self.format_batch(long_batch = True)
+                rollout_video_GT_bnchw      = rollout_video_GT_bnchw[0:1].float()
+                rollout_video_TF_nchw       = self._model_unwrapped().autoregressive_rollout(rollout_video_GT_bnchw[0],
+                                                                                             teacher_forced=True,
+                                                                                             adjust_residual = self.loss_variant == 'residual')
+                rollout_video_AR_nchw       = self._model_unwrapped().autoregressive_rollout(rollout_video_GT_bnchw[0],
+                                                                                             teacher_forced=False,
+                                                                                             adjust_residual = self.loss_variant == 'residual')
+                
+                if self.loss_variant == 'residual':
+                    recon_video_bnchw       += condition_video_bnchw
 
                 if self.on_latents:
                     condition_video_nchw    = F.sigmoid(self.decoder(eo.rearrange(condition_video_bnchw,   'b n c h w -> (b n) c h w').bfloat16()))
                     recon_video_nchw        = F.sigmoid(self.decoder(eo.rearrange(recon_video_bnchw,       'b n c h w -> (b n) c h w').bfloat16()))
                     gt_video_nchw           = F.sigmoid(self.decoder(eo.rearrange(gt_video_bnchw,          'b n c h w -> (b n) c h w').bfloat16()))
+                    gt_rollout_nchw         = F.sigmoid(self.decoder(eo.rearrange(rollout_video_GT_bnchw,  'b n c h w -> (b n) c h w').bfloat16()))
+                    ar_rollout_nchw         = F.sigmoid(self.decoder(rollout_video_AR_nchw.bfloat16()))
+                    tf_rollout_nchw         = F.sigmoid(self.decoder(rollout_video_TF_nchw.bfloat16()))
+
                     condition_video_bnchw   = eo.rearrange(condition_video_nchw,                           '(b n) c h w -> b n c h w', b=num_samples_recon)
                     recon_video_bnchw       = eo.rearrange(recon_video_nchw,                               '(b n) c h w -> b n c h w', b=num_samples_recon)
                     gt_video_bnchw          = eo.rearrange(gt_video_nchw,                                  '(b n) c h w -> b n c h w', b=num_samples_recon)
@@ -371,8 +394,11 @@ class Trainer_LatentActionModel(BaseTrainer):
                 if self._wandb_run:
                     print(f"[rank {self.rank}] logging to wandb")
                     wandb.log({
-                        f"UMAP Scatter Plot/{self.global_step}": scatter_plot,
-                        f"Reconstruction/{self.global_step}": video_table,
+                        f"UMAP Scatter Plot/{self.global_step}":            scatter_plot,
+                        f"Reconstruction/{self.global_step}":               video_table,
+                        f"Rollout/Groundtruth    - {self.global_step}":     as_wandb_video(gt_rollout_nchw),
+                        f"Rollout/Teacher.forced - {self.global_step}":     as_wandb_video(tf_rollout_nchw),
+                        f"Rollout/Autoregressive - {self.global_step}":     as_wandb_video(ar_rollout_nchw),
                     }, step=self.global_step)
 
         print(f"[rank {self.rank}] validation done")

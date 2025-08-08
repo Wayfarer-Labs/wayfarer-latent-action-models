@@ -80,23 +80,23 @@ class LatentActionModel(nn.Module):
         
         nn.init.uniform_(self.action_prompt, -1, 1)
     
-        self.encoder        = ST_Transformer(in_dim=self.patch_token_dim,
-                                             model_dim=self.model_dim,
-                                             out_dim=self.model_dim,
-                                             num_blocks=num_enc_blocks,
-                                             num_heads=num_heads, dropout=dropout)
+        self.encoder        = ST_Transformer(in_dim     = self.patch_token_dim,
+                                             model_dim  = self.model_dim,
+                                             out_dim    = self.model_dim,
+                                             num_blocks = num_enc_blocks,
+                                             num_heads  = num_heads, dropout=dropout)
         
         # -- vae
         self.moments_proj   = nn.Linear(model_dim,              self.vae_dim * 2)
         self.patch_proj     = nn.Linear(self.patch_token_dim,   model_dim)
         self.action_proj    = nn.Linear(self.vae_dim,           model_dim)
         
-        self.decoder        = S_Transformer(in_dim=self.model_dim,
-                                            model_dim=model_dim,
-                                            out_dim=self.patch_token_dim,
-                                            num_blocks=num_dec_blocks,
-                                            num_heads=num_heads,
-                                            dropout=dropout)
+        self.decoder        = S_Transformer(in_dim      = self.model_dim,
+                                            model_dim   = model_dim,
+                                            out_dim     = self.patch_token_dim,
+                                            num_blocks  = num_dec_blocks,
+                                            num_heads   = num_heads,
+                                            dropout     = dropout)
         self.on_latents     = self.in_dim > 3
         self.normalize      = F.sigmoid if not self.on_latents else identity
 
@@ -107,8 +107,7 @@ class LatentActionModel(nn.Module):
 
     @property
     def rho(self) -> Tensor:
-        if self.conditioning == 'gated_crossattn':
-            return self.cond_net.rho
+        if self.conditioning == 'gated_crossattn': return self.cond_net.rho
         return None
 
     def bump_step(self): self._step += 1
@@ -196,11 +195,40 @@ class LatentActionModel(nn.Module):
                                         **action_info,
                                         **reconstruction_info )
 
+    @torch.no_grad()
+    def autoregressive_rollout(self, video_nchw: Tensor, teacher_forced: bool = False, adjust_residual: bool = False):
+        # Takes in a video, finds the latent actions between frames,
+        # and uses those latent actions to rollout starting from the first frame of the video.
+        try:
+            self.eval()
+            action_info: ActionEncodingInfo = self.encode_to_actions(video_nchw.unsqueeze(0))
+            num_frames_to_generate: int     = video_nchw.shape[0] - 1
+            idx: int                        = 0
+            current_frame_chw               = video_nchw[idx]
+            frames_chw: list[Tensor]        = [current_frame_chw]
+
+            while idx < num_frames_to_generate:
+                current_action_d     = action_info['action_bn1d'][0,idx,0]
+                if teacher_forced:  condition_video_nchw = video_nchw[idx:idx+1]
+                else:               condition_video_nchw = frames_chw[-1].unsqueeze(0)
+                
+                reconstruction_info: ActionDecodingInfo = self.decode_to_frame(
+                    condition_video_nchw.unsqueeze  (0),
+                    current_action_d    .expand     (1,1,1,-1) # B N 1 D
+                )
+                frame_adjust: Tensor = torch.zeros_like(current_frame_chw) if not adjust_residual else current_frame_chw
+                idx                 += 1
+                current_frame_chw    = reconstruction_info['reconstructed_video_bnchw'][0,-1]
+                frames_chw          += [current_frame_chw + frame_adjust] # -- we adjust the frame if we are predicting residuals
+            return  torch.stack(frames_chw, dim=0)
+        finally:    self.train()
+
+
 if __name__ == '__main__':
     video_bnchw = torch.randn(4, 32, 3, 224, 224)
-    lam = LatentActionModel(video_dims=(64,64), in_dim=3,
+    lam = LatentActionModel(video_dims=(224,224), in_dim=3,
                             model_dim=64, vae_dim=16,
                             patch_size=8, num_enc_blocks=4,
                             num_dec_blocks=4, num_heads=4)
-    out = lam(video_bnchw)
-    print({k: v.shape for k,v in out.items()})
+    video_nchw = video_bnchw[0]
+    out = lam.autoregressive_rollout(video_nchw, teacher_forced=True)

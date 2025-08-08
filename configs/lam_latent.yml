@@ -2,16 +2,16 @@ ckpt_dir: /mnt/data/sami/checkpoints/lam  # where checkpoints go
 resume_checkpoint: null                   # path to *.pt to resume from (or null)
 
 # -- optimizer
-lr: 1.5e-6                       # AdamW learning-rate
+lr: 6.0e-6                       # AdamW learning-rate
 weight_decay: 0.001
 betas: [0.9, 0.999]
 amp: true                        # mixed-precision (16-mixed)
 max_grad_norm: 5.0               # gradient-clip value
 
 # -- training loop
-max_steps: 100000
+max_steps: 5000000
 log_every: 20                  # log interval
-ckpt_every: 5000                 # save interval
+ckpt_every: 30000                 # save interval
 
 # -- model
 video_dims: [8, 8]           # H, W
@@ -26,15 +26,17 @@ dropout: 0.0
 beta_start: null
 beta: 4.0e-4                     # KL weight
 beta_step_percent: null
-val_num_samples_umap: 50
+val_num_samples_umap: 800
 val_num_samples_recon: 5
-val_every: 5000
+val_every: 10000
+rollout_every: 10000
+rollout_n: 32
 
 # -- conditoning: add or crossattn or gated_crossattn
 conditioning: gated_crossattn
 conditioning_kwargs:
-  freeze_steps_pct: 0.03
-  init_gate: 0.05
+  freeze_steps_pct: 0.01
+  init_gate: 0.15
 # -- whether the decoder outputs the difference between frames or the new frame itself
 loss_variant: reconstruction
 
@@ -44,6 +46,6 @@ data:
   dataset_name: owl_data_latent
   num_frames: 2
   resolution: 256
-  samples_per_epoch: 100000
+  samples_per_epoch: 500000
   num_workers: 64
   stride: 6

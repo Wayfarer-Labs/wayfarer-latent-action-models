@@ -58,6 +58,9 @@ class BaseTrainerConfig:
     log_every:       int                    = 100
     ckpt_every:      int                    = 5_000
     val_every:       int                    = 2_500
+    rollout_every:   int                    = 5_000
+    rollout_n:       int                    = 32
+
 
 @dataclass
 class LatentActionModelTrainingConfig(BaseTrainerConfig):

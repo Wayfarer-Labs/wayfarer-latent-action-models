@@ -1,4 +1,4 @@
-import pathlib, torch, time, os, abc
+import pathlib, torch, time, os, abc, copy
 from abc import abstractmethod
 from contextlib        import nullcontext
 from torch.optim       import AdamW
@@ -26,7 +26,13 @@ class BaseTrainer(nn.Module):
         self.batch_size     = cfg.data_config.batch_size
         # -- data
         self.dataloader     = create_dataloader(self.cfg.data_config)
+        long_data_config    = copy.deepcopy(self.cfg.data_config)
+        long_data_config.num_frames = self.cfg.rollout_n
         self.iter_loader    = iter(self.dataloader)
+        # -- used only for rollouts where we want more than just 2 frames.
+        self.long_dataloader    = create_dataloader(long_data_config)
+        self.iter_long_loader   = iter(self.long_dataloader)
+        
         # -- dirs
         self.ckpt_dir       = pathlib.Path(cfg.ckpt_dir or CKPT_DIR)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
