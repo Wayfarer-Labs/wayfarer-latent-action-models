@@ -1,9 +1,10 @@
 import pathlib, torch, time, os, abc, copy
-from abc import abstractmethod
-from contextlib        import nullcontext
-from torch.optim       import AdamW
-from torch.nn          import utils
-from torch             import nn, Tensor
+from abc                import abstractmethod
+from contextlib         import nullcontext
+from torch.optim        import AdamW
+from torch.nn           import utils
+from torch              import nn, Tensor
+from torch.utils.data   import IterableDataset
 
 from latent_action_models.configs               import BaseTrainerConfig
 from latent_action_models.utils                 import init_distributed
@@ -26,37 +27,47 @@ class BaseTrainer(nn.Module):
         self.batch_size     = cfg.data_config.batch_size
         # -- data
         self.dataloader     = create_dataloader(self.cfg.data_config)
+        self.dataset        = self.dataloader.dataset
+        self.is_iterable    =  isinstance(self.dataset, IterableDataset)
         long_data_config    = copy.deepcopy(self.cfg.data_config)
         long_data_config.num_frames = self.cfg.rollout_n
         self.iter_loader    = iter(self.dataloader)
+        self.epoch          = 0
+
+        if self.is_iterable:
+            self.num_epochs, self.epoch_steps = 1, self.cfg.max_steps
+        else:
+            self.num_epochs, self.epoch_steps = self.cfg.data_config.num_epochs, len(self.dataloader)
+
         # -- used only for rollouts where we want more than just 2 frames.
         self.long_dataloader    = create_dataloader(long_data_config)
         self.iter_long_loader   = iter(self.long_dataloader)
-        
         # -- dirs
-        self.ckpt_dir       = pathlib.Path(cfg.ckpt_dir or CKPT_DIR)
+        self.ckpt_dir           = pathlib.Path(cfg.ckpt_dir or CKPT_DIR)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
-
         # -- optimisation
-        self.optimizer      = AdamW(self.model.parameters(),
-                                lr=cfg.lr,
-                                weight_decay=cfg.weight_decay,
-                                betas=cfg.betas)
+        self.optimizer          = AdamW(self.model.parameters(),
+                                    lr=cfg.lr,
+                                    weight_decay=cfg.weight_decay,
+                                    betas=cfg.betas)
 
+
+        max_steps = self.num_epochs * self.epoch_steps
+        milestone = int(max_steps // 100)
         warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
             self.optimizer, 
             start_factor=0.001,
             end_factor=1.0,
-            total_iters=cfg.max_steps // 100.  # 1% of total steps for warmup
+            total_iters=milestone  # 1% of total steps for warmup
         )
         cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer,
-            T_max=cfg.max_steps - (cfg.max_steps // 100.)
+            T_max=(max_steps - milestone)
         )
         self.scheduler = torch.optim.lr_scheduler.SequentialLR(
             self.optimizer,
             schedulers=[warmup_scheduler, cosine_scheduler],
-            milestones=[cfg.max_steps // 100.]
+            milestones=[milestone]
         )
         self.max_grad_norm  = cfg.max_grad_norm
         self.use_amp        = cfg.amp
@@ -117,10 +128,6 @@ class BaseTrainer(nn.Module):
     @property
     def should_load(self) -> bool:
         return self.cfg.resume_checkpoint is not None       and self.rank == 0
-    
-    @property
-    def should_train(self) -> bool:
-        return self.global_step < self.cfg.max_steps
 
     @property
     def should_validate(self) -> bool:

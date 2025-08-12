@@ -118,6 +118,7 @@ class LatentDataset(Dataset):
                 
                 # number of valid start positions for exactly num_frames with given stride
                 count = L - window_span
+                print(L, count)
                 if count <= 0: continue
 
                 chunk_paths += [chunk]
@@ -166,46 +167,6 @@ class LatentDataset(Dataset):
         torch   .save(manifest, tmp_path)        # binary, compact, fast
         os      .replace(tmp_path, manifest_path)   # atomic on POSIX
         return manifest
-
-
-    # @classmethod
-    # def build_manifest(num_frames: int, stride: int, base_dir: Path):
-    #     fieldnames          = ( 'chunk_idx', 'chunk_size', 'episode_idx', 'start_idx', 'end_idx' )
-    #     cache_manifest_path = MANIFEST_PATH / f'1xlatents_stride-{stride}_numframes-{num_frames}.csv'
-        
-    #     if cache_manifest_path.exists():
-    #         return list(csv.DictReader(open(cache_manifest_path, 'r'), fieldnames=fieldnames))
-
-    #     window_size         = num_frames * stride
-    #     episode_chunk_pairs = (
-    #         (episode_path, chunk)
-    #         for episode_path    in base_dir.glob('*')
-    #         for chunk           in (episode_path / 'splits').glob('*_rgblatent.pt')
-    #     )
-
-    #     writer = csv.DictWriter(open(cache_manifest_path, 'w'), fieldnames=fieldnames) 
-    #     writer.writeheader()
-        
-    #     for epi, chunk in episode_chunk_pairs:
-    #         length          = torch.load(chunk, map_location='meta').shape[0]
-    #         valid_starts    = list(range(0, length - (num_frames-1)*stride))
-            
-    #         writer.writerows([
-    #             {
-    #                 'chunk_idx':    int(chunk.stem.split('_')[0]),
-    #                 'episode_idx':  int(epi.stem),
-    #                 'start_idx':    start_idx,
-    #                 'end_idx':      start_idx + window_size,
-    #                 'chunk_size':   length,
-    #             }
-    #             for start_idx in valid_starts
-    #         ])
-        
-    #     return csv.DictReader(open(cache_manifest_path, 'r'), fieldnames=fieldnames)
-
-        
-
-
 
 
 class LatentIterableDataset(IterableDataset):

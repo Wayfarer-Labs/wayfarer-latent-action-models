@@ -8,14 +8,15 @@ from    typing              import Optional, Any, Literal, Generator
 from    torch.utils.data    import DataLoader, Dataset
 
 
-DatasetType = Literal["gta_4", "call_of_duty", "random", "owl_data", "owl_data_latent"]
+DatasetType = Literal["gta_4", "call_of_duty", "random", "owl_data", "owl_data_latent", "owl_data_latent_map"]
 
 @dataclass
 class DataConfig:
     batch_size:             int         = 8
     dataset_name:   DatasetType         = "gta_4"
-    resolution:             int         = 256 # TODO use this.
+    resolution:             int         = 256
     num_frames:             int         = 2
+    num_epochs:             int         = 10
     samples_per_epoch:      int         = 1_000_000
     num_workers:            int         = 8
     stride:                 int         = 1

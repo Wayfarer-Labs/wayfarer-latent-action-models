@@ -4,15 +4,15 @@ import  torch
 from    pathlib                         import Path
 from    typing                          import Literal
 from    torch                           import Tensor
-from    torch.utils.data                import Dataset, DataLoader, IterableDataset
+from    torch.utils.data                import Dataset, DataLoader, DistributedSampler, IterableDataset
 
 from    latent_action_models.configs                                import DataConfig
 from    latent_action_models.datasets.clip_metadata_generator       import _dataset_clips, ClipEntry
 from    latent_action_models.utils                                  import init_distributed
 from    latent_action_models.datasets.decord_dataset                import DecordVideoDataset
 from    latent_action_models.datasets.robotics_1x_dataset           import Robotics_1X_Dataset
-from    latent_action_models.datasets.video_loader                  import VideoServerIterableDataset,  video_collate_fn
-from    latent_action_models.datasets.latent_loader                 import LatentIterableDataset,       latent_collate_fn
+from    latent_action_models.datasets.video_loader                  import VideoServerIterableDataset, video_collate_fn
+from    latent_action_models.datasets.latent_loader                 import LatentDataset, LatentIterableDataset, latent_collate_fn
 
 
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' 
@@ -43,7 +43,7 @@ def _dataset(dataset: Literal["random"], config: DataConfig, rank: int = 0, worl
 
 @multimethod
 def _dataset(dataset: Literal["gta_4"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
-    if CLIPS_BASE_DIR / 'gta4_clips.jsonl':
+    if (CLIPS_BASE_DIR / 'gta4_clips.jsonl').exists():
         clips   = [ClipEntry(**json.loads(line)) for line in open(CLIPS_BASE_DIR / 'gta4_clips.jsonl').readlines()]
     else: clips = _dataset_clips(dataset)
 
@@ -52,7 +52,7 @@ def _dataset(dataset: Literal["gta_4"], config: DataConfig, rank: int = 0, world
 
 @multimethod
 def _dataset(dataset: Literal["call_of_duty"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
-    if CLIPS_BASE_DIR / 'cod_clips.jsonl':
+    if (CLIPS_BASE_DIR / 'cod_clips.jsonl').exists():
         clips   = [ClipEntry(**json.loads(line)) for line in open(CLIPS_BASE_DIR / 'cod_clips.jsonl').readlines()]
     else: clips = _dataset_clips(dataset)
 
@@ -73,6 +73,10 @@ def _dataset(dataset: Literal["owl_data"], config: DataConfig, rank: int = 0, wo
 def _dataset(dataset: Literal["owl_data_latent"], config: DataConfig, rank: int = 0, world: int = 1) -> IterableDataset:
     return LatentIterableDataset(num_frames=config.num_frames, stride=config.stride)
 
+@multimethod
+def _dataset(dataset: Literal["owl_data_latent_map"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
+    return LatentDataset(num_frames=config.num_frames, stride=config.stride)
+
 
 def create_dataloader(config: DataConfig) -> DataLoader:
     rank, world, _  = init_distributed()
@@ -83,14 +87,27 @@ def create_dataloader(config: DataConfig) -> DataLoader:
     if config.dataset_name == "owl_data_latent":    collate_fn = latent_collate_fn
 
     num_workers = config.num_workers
+    shuffle     = False
+    sampler     = None
+
+    if not isinstance(dataset, IterableDataset):
+        shuffle = world == 1 # Don't shuffle in a Map-style distributed setting
+        if world > 1:
+            sampler = DistributedSampler(dataset, shuffle=True, drop_last=True)
+
     if config.dataset_name == "owl_data":
         num_workers = 0
 
     return DataLoader(
-        dataset,
-        batch_size=config.batch_size,
-        num_workers=num_workers,
-        collate_fn=collate_fn
+        dataset     = dataset,
+        batch_size  = config.batch_size,
+        num_workers = num_workers,
+        collate_fn  = collate_fn,
+        shuffle     = shuffle,
+        sampler     = sampler,
+        pin_memory  = True,
+        persistent_workers = num_workers > 0,
+        drop_last   = True
     )
 
 

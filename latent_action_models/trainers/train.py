@@ -5,6 +5,7 @@ import  polars as pl
 import  torch
 import  pandas as pd
 from torch._dynamo.eval_frame import null_context
+from torch.utils.data import Dataset, IterableDataset
 import  wandb
 import  pathlib
 import  traceback
@@ -15,10 +16,12 @@ import  einops as eo
 import  plotly.express as px
 from    torch.types import Number
 from    torch       import Tensor
+
 import  torch.nn.functional as F
 import  plotly.figure_factory as ff
 import  plotly.graph_objects as go
-from    typing      import TypedDict, NotRequired, Literal
+from    typing      import TypedDict, NotRequired, Literal, Generator, TypedDict, Any
+
 
 from latent_action_models.datasets.video_loader import video_collate_fn
 from latent_action_models.models.latent_action_model    import ActionEncodingInfo, LatentActionModel, LatentActionModelOutput
@@ -32,6 +35,27 @@ from latent_action_models.utils                         import (
 )
 from latent_action_models.data_exploration              import create_actions_parquet as lam_parquet
 from latent_action_models.vae_bridge.owl_vae_bridge     import R3DCDecodingPipeline 
+
+
+class BatchEvent(TypedDict):
+    video_vnchw:    Tensor
+    meta:           dict[str, Any]
+    data_sec:       float
+    epoch:          int
+
+
+def timed(iterator, *, sync_cuda: bool = False):
+    it = iter(iterator)
+    while True:
+        t0 = time.perf_counter()
+        try:
+            batch = next(it)
+            if sync_cuda and torch.cuda.is_available(): torch.cuda.synchronize()
+            yield (
+                (time.perf_counter() - t0),
+                batch
+            )
+        except StopIteration: break
 
 
 class LogStats(TypedDict):
@@ -84,14 +108,14 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.beta_scheduler     = config.beta_scheduler_linear_warmup()
         self._wandb_run         = None
         self.debug_show_samples = 0
-        self.on_latents         = config.data_config.dataset_name == 'owl_data_latent'
+        self.on_latents         = 'latent' in config.data_config.dataset_name
         self.decoder            = R3DCDecodingPipeline() if self.on_latents else None
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
         self.loss_variant: Literal['residual', 'reconstruction'] = self.cfg.loss_variant
         self.conditioning_type: Literal['add', 'crossattn', 'gated_crossattn'] = self.cfg.conditioning
 
     @property
-    def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}.pt'
+    def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}_vaedim{self.cfg.vae_dim}.pt'
 
     def load_checkpoint(self, path: os.PathLike) -> None:
         ckpt = torch.load(path, map_location="cpu")
@@ -127,29 +151,61 @@ class Trainer_LatentActionModel(BaseTrainer):
         print(f"[rank {self.rank}] checkpoint saved to {path}")
 
 
-    def format_batch(self, long_batch: bool = False) -> tuple[Tensor, dict]:
-        loader = self.iter_loader if not long_batch else self.iter_long_loader
-        try:
-            video_bnchw, metadata = next(loader)
-        except  StopIteration:
-            if long_batch:  self.iter_long_loader   = iter(self.long_dataloader)
-            else:           self.iter_loader        = iter(self.iter_loader)
-            return self.format_batch(long_batch=long_batch)
-        except  Exception as e:
-            print(f"[rank {self.rank}] error in format_batch({long_batch=}): {e}") ; traceback.print_exc()
-            return self.format_batch(long_batch=long_batch)
+    def _format_batch(self, batch: tuple) -> tuple[Tensor, dict]:
+        video_bnchw, metadata   = batch
+        video_bnchw             = video_bnchw.to(self.device, non_blocking=True)
         
-        video_bnchw = video_bnchw.to(self.device) 
+        if not self.on_latents:
+            video_bnchw = (video_bnchw + 1.) / 2.
 
-        if self.on_latents:
-            video_bnchw = video_bnchw
-        else:
-            video_bnchw = (video_bnchw + 1.) / 2. # -1,1 to 0, 1
-
-        return  (
+        return (
             video_bnchw,
             metadata
         )
+
+
+    def iter_dataset(
+        self,
+        long_batch: bool = False,
+        *,
+        sync_cuda_timing: bool = True,
+    ) -> Generator[BatchEvent, None, None]:
+        """
+        - Map-style: ends on StopIteration (one pass). Trainer owns epoch setup.
+        - Iterable: recreates iterator on StopIteration (infinite stream).
+        - Measures per-batch data time (includes H2D if sync_cuda_timing=True).
+        """
+        loader      = self.long_dataloader if long_batch else self.dataloader
+        it          = self.iter_long_loader if long_batch else self.iter_loader
+        is_iterable = isinstance(self.dataset, IterableDataset)
+
+        while True:
+            t0 = time.perf_counter()
+            try:
+                batch = next(it)
+            except StopIteration:
+                if is_iterable:
+                    # infinite stream semantics
+                    it = iter(loader)
+                    if long_batch: self.iter_long_loader = it
+                    else:          self.iter_loader      = it
+                    continue
+                else:
+                    # one pass per call (epoch ends here)
+                    break
+            except Exception as e:
+                print(f'[rank {self.rank}] iter_dataset({long_batch=}) error: {e}')
+                traceback.print_exc()
+                continue
+
+            # Move/normalize inside timing window
+            video, meta = self._format_batch(batch)
+            if sync_cuda_timing and torch.cuda.is_available():
+                torch.cuda.synchronize()
+            data_sec = time.perf_counter() - t0
+
+            yield BatchEvent(video=video, meta=meta, data_sec=data_sec, epoch=self.epoch)
+
 
     def reconstruction_loss(self, lam_outputs: LatentActionModelOutput, as_baseline: bool = False, as_condition: bool = False) -> Tensor:
         # -- as_baseline:   get the mse between condition and target, as the loss when learning the identity function
@@ -260,149 +316,201 @@ class Trainer_LatentActionModel(BaseTrainer):
     def commit_log(self) -> None:
         if self._wandb_run: wandb.log({}, commit=True)
 
-    def train(self)   -> None:
-        while self.should_train and (start_time := time.time()):
-            barrier()
-            print(f"[rank {self.rank}] training step {self.global_step}")
-            video_bnchw, *_       =  self.format_batch()          ; batch_time   = time.time() - start_time
-            info:        LogStats =  self.train_step(video_bnchw) ; iter_time    = time.time() - start_time
-            print(f"[rank {self.rank}] batch dims {video_bnchw.shape} - batch time {batch_time} train time {iter_time} - batch checksum {video_bnchw.sum()}")
-            info['iter_sec']      =  iter_time / self.batch_size
-            info['batch_sec']     =  batch_time
-
-            if self.should_log:      self.log_step(info)
-            if self.should_save:     self.save_checkpoint(self.ckpt_dir / self.save_path)
-            if self.should_validate: self.validate_simple()
-                    
-            if bool(self.debug_show_samples) and self.should_log:
-                if self.on_latents:
-                    num_debug_samples = 3
-                    video_nchw  = eo.rearrange(video_bnchw[:num_debug_samples], 'b n c h w -> (b n) c h w')
-                    decoded     = self.decoder(video_nchw)
-                    video_bnchw = eo.rearrange(decoded, '(b n) c h w -> b n c h w', b=num_debug_samples)
-                    video_bnchw = F.sigmoid(video_bnchw)
-                    
-                wandb.log({
-                    f'debug/sample_{self.debug_show_samples}_video': as_wandb_video(video_bnchw, "video"),
-                }, step=self.global_step)
-                self.debug_show_samples -= 1
+    def log_debug_sample(self, video_bnchw: Tensor):
+        if self.on_latents:
+            num_debug_samples = 3
+            video_nchw  = eo.rearrange(video_bnchw[:num_debug_samples], 'b n c h w -> (b n) c h w')
+            decoded     = self.decoder(video_nchw)
+            video_bnchw = eo.rearrange(decoded, '(b n) c h w -> b n c h w', b=num_debug_samples)
+            video_bnchw = F.sigmoid(video_bnchw)
             
-            self.global_step     += 1 ; self.commit_log() # -- only commit when all logs are written so we keep global-step monotonic invariant
-            self.model.bump_step()
-            print(f"[rank {self.rank}] training step done {self.global_step}")
+        wandb.log({
+            f'debug/sample_{self.debug_show_samples}_video': as_wandb_video(video_bnchw, "video"),
+        }, step=self.global_step)
+        self.debug_show_samples -= 1
 
-        self.save_checkpoint(self.ckpt_dir / self.save_path)
-        return
+    def train(self):
+        for self.epoch in range(self.num_epochs):
+            if not self.is_iterable:
+                if (hasattr(self.dataloader, "sampler") and 
+                    hasattr(self.dataloader.sampler, "set_epoch")
+                ):
+                    self.dataloader.sampler.set_epoch(self.epoch)
+                self.iter_loader = iter(self.dataloader)
+            elif self.epoch == 0:
+                self.iter_loader = iter(self.dataloader)
+
+            for step_in_epoch, event in enumerate(self.iter_dataset(sync_cuda_timing=True)):
+                batch_time          = event["data_sec"]
+                video_bnchw         = event["video"]
+                start_time          = time.perf_counter()
+                info: LogStats      = self.train_step(video_bnchw) ; torch.cuda.synchronize()
+                train_time          = time.perf_counter() - start_time
+
+                info['iter_sec']    = batch_time + train_time
+                info['batch_sec']   = batch_time
+                info['train_sec']   = train_time
+
+                if self.should_log:         self.log_step(info)
+                if self.should_save:        self.save_checkpoint(self.ckpt_dir / self.save_path)
+                if self.should_validate:    self.validate_simple()
+
+                self.global_step += 1 ; self.commit_log()
+                self.model.bump_step()
+                if self.rank == 0: print(f'[rank {self.rank}] step {self.global_step}')
+                # -- in the iterable dataset case, we just have 1 epoch of size max_steps
+                if (step_in_epoch+1) >= self.epoch_steps:
+                    break
+        
+        if self.rank == 0: print(f'[rank {self.rank}] training complete.')
 
     @torch.no_grad()
     def validate_simple(self) -> None:
-        model: LatentActionModel    = self._model_unwrapped()
-        num_samples_umap            = self.cfg.val_num_samples_umap
-        num_samples_recon           = self.cfg.val_num_samples_recon
+        model: LatentActionModel = self._model_unwrapped()
 
-        # -- Simplified data collection --
-        num_processed_umap_samples  = 0
-        _more_umap = lambda: num_processed_umap_samples < num_samples_umap
-        num_processed_recon_samples = 0
-        _more_recon = lambda: num_processed_recon_samples < num_samples_recon
-        
-        latent_actions_list_bn1d = []
-        recon_videos_list_bnchw = []
+        # ---- targets ----
+        target_umap   = int(self.cfg.val_num_samples_umap)
+        target_recon  = int(self.cfg.val_num_samples_recon)
 
-        while _more_umap() or _more_recon():
-            # REMOVED: No longer need paths or start indices from the batch
-            video_bnchw, _ = self.format_batch()
-            
-            if _more_umap():
+        # ---- collectors ----
+        latent_actions_list_bn1d: list[Tensor] = []
+        recon_videos_list_bnchw: list[Tensor]  = []
+
+        # ---- iterators (normal + long) ----
+        ev_iter      = self.iter_dataset(sync_cuda_timing=False)
+        ev_iter_long = self.iter_dataset(long_batch=True, sync_cuda_timing=False)
+
+        # ---- pull until quotas met ----
+        umap_done = recon_done = False
+        umap_count = recon_count = 0
+
+        while not (umap_done and recon_done):
+            # get a standard batch event; if exhausted (map-style), recreate iterator and continue
+            try:
+                ev = next(ev_iter)
+            except StopIteration:
+                # Map-style validation during training will just recreate from current dataloader
+                if not self.is_iterable:
+                    self.iter_loader = iter(self.dataloader)
+                ev_iter = self.iter_dataset(sync_cuda_timing=False)
+                ev = next(ev_iter)
+
+            video_bnchw = ev["video"]
+
+            if not umap_done:
                 action_info = model.encode_to_actions(video_bnchw)
-                latent_actions_list_bn1d.append(action_info['mean_bn1d'])
-                num_umap_samples_in_batch = action_info['mean_bn1d'].shape[0] * action_info['mean_bn1d'].shape[1]
-                num_processed_umap_samples += num_umap_samples_in_batch
+                latent_actions_list_bn1d.append(action_info["mean_bn1d"])
+                # count = B * N (batch x temporal windows)
+                umap_count += action_info["mean_bn1d"].shape[0] * action_info["mean_bn1d"].shape[1]
+                umap_done   = umap_count >= target_umap
 
-            if _more_recon():
-                recon_videos_list_bnchw.append(video_bnchw[:num_samples_recon, ::])
-                num_recon_samples_in_batch = video_bnchw.shape[0]
-                num_processed_recon_samples += num_recon_samples_in_batch
+            if not recon_done:
+                # take up to what we still need
+                need = max(0, target_recon - recon_count)
+                if need > 0:
+                    recon_videos_list_bnchw.append(video_bnchw[:need])
+                    recon_count += min(need, video_bnchw.shape[0])
+                recon_done = recon_count >= target_recon
 
         print(f"[rank {self.rank}] validation data collected")
 
         if self._wandb_enabled:
-            # -- Gather tensors from all GPUs --
-            latent_actions_bn1d     = torch.cat(latent_actions_list_bn1d, dim=0)
-            latent_actions_n1d      = eo.rearrange(latent_actions_bn1d, 'b n 1 d -> (b n) 1 d')
-            latent_actions_n1d      = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
+            # -- UMAP prep (gather across ranks first) --
+            latent_actions_bn1d = torch.cat(latent_actions_list_bn1d, dim=0)  # [B, N, 1, D]
+            latent_actions_n1d  = eo.rearrange(latent_actions_bn1d, "b n 1 d -> (b n) 1 d")
+            latent_actions_n1d  = gather_to_rank(latent_actions_n1d, dst=0, dim=0, cat=True)
 
-            recon_videos_bnchw      = torch.cat(recon_videos_list_bnchw, dim=0)
-            lam_outputs             = model.forward(recon_videos_bnchw.float())  # why do we cast here? idfk
-            condition_video_bnchw   = gather_to_rank(lam_outputs["condition_video_bnchw"], dst=0, dim=0, cat=True)
-            recon_video_bnchw       = gather_to_rank(lam_outputs["reconstructed_video_bnchw"], dst=0, dim=0, cat=True)
-            gt_video_bnchw          = gather_to_rank(lam_outputs["next_state_video_bnchw"], dst=0, dim=0, cat=True)
+            # -- Recon pass on the recon sample batch --
+            recon_videos_bnchw    = torch.cat(recon_videos_list_bnchw, dim=0)  # [R, N, C, H, W]
+            lam_outputs           = model.forward(recon_videos_bnchw.float())
+            condition_video_bnchw = gather_to_rank(lam_outputs["condition_video_bnchw"],     dst=0, dim=0, cat=True)
+            recon_video_bnchw     = gather_to_rank(lam_outputs["reconstructed_video_bnchw"], dst=0, dim=0, cat=True)
+            gt_video_bnchw        = gather_to_rank(lam_outputs["next_state_video_bnchw"],    dst=0, dim=0, cat=True)
 
-            if self.rank == 0:
-                # --- SIMPLIFIED UMAP PLOTTING ---
-                
-                # 1. Get the 2D UMAP embedding (assuming a simplified umap_visualization helper)
-                umap_embed_n2, _ = umap_visualization(latent_actions_n1d)
+            # Residual variant: shift prediction once (not twice)
+            if self.loss_variant == "residual":
+                recon_video_bnchw = recon_video_bnchw + condition_video_bnchw
 
-                # 2. Create a wandb.Table with just the coordinates
-                umap_table = wandb.Table(columns=['umap_x', 'umap_y'])
-                for x, y in umap_embed_n2:
-                    umap_table.add_data(x, y)
-                
-                # 3. Create a scatter plot object from the table
-                scatter_plot = wandb.plot.scatter(
-                    umap_table, 'umap_x', 'umap_y', title=f"UMAP Visualization (Step {self.global_step})"
+            # ---- Rollouts need long sequences (>2 frames) ----
+            # Get a long-batch sample; if exhausted, recreate iterator and pull again
+            try:
+                ev_long = next(ev_iter_long)
+            except StopIteration:
+                if not self.is_iterable:
+                    self.iter_long_loader = iter(self.long_dataloader)
+                ev_iter_long = self.iter_dataset(long_batch=True, sync_cuda_timing=False)
+                ev_long = next(ev_iter_long)
+
+            rollout_video_GT_bnchw = ev_long["video"][0:1].float()  # take one sequence
+
+            rollout_video_TF_nchw = self._model_unwrapped().autoregressive_rollout(
+                rollout_video_GT_bnchw[0],
+                teacher_forced=True,
+                adjust_residual=(self.loss_variant == "residual"),
+            )
+            rollout_video_AR_nchw = self._model_unwrapped().autoregressive_rollout(
+                rollout_video_GT_bnchw[0],
+                teacher_forced=False,
+                adjust_residual=(self.loss_variant == "residual"),
+            )
+
+            # ---- Decode to RGB if operating in latent space ----
+            if self.on_latents:
+                # flatten BN to (B*N) for bridge, then reshape back
+                cond_nchw = eo.rearrange(condition_video_bnchw, "b n c h w -> (b n) c h w").bfloat16()
+                pred_nchw = eo.rearrange(recon_video_bnchw,     "b n c h w -> (b n) c h w").bfloat16()
+                gt_nchw   = eo.rearrange(gt_video_bnchw,        "b n c h w -> (b n) c h w").bfloat16()
+
+                condition_video_nchw = F.sigmoid(self.decoder(cond_nchw))
+                recon_video_nchw     = F.sigmoid(self.decoder(pred_nchw))
+                gt_video_nchw        = F.sigmoid(self.decoder(gt_nchw))
+
+                condition_video_bnchw = eo.rearrange(
+                    condition_video_nchw, "(b n) c h w -> b n c h w", b=condition_video_bnchw.shape[0]
+                )
+                recon_video_bnchw = eo.rearrange(
+                    recon_video_nchw, "(b n) c h w -> b n c h w", b=recon_video_bnchw.shape[0]
+                )
+                gt_video_bnchw = eo.rearrange(
+                    gt_video_nchw, "(b n) c h w -> b n c h w", b=gt_video_bnchw.shape[0]
                 )
 
-                # --- Reconstruction table (unchanged) ---
+                # also decode long sequences for rollouts
+                gt_rollout_nchw = F.sigmoid(self.decoder(eo.rearrange(rollout_video_GT_bnchw, "b n c h w -> (b n) c h w").bfloat16()))
+                tf_rollout_nchw = F.sigmoid(self.decoder(rollout_video_TF_nchw.bfloat16()))
+                ar_rollout_nchw = F.sigmoid(self.decoder(rollout_video_AR_nchw.bfloat16()))
+            else:
+                # already pixels
+                gt_rollout_nchw = eo.rearrange(rollout_video_GT_bnchw, "b n c h w -> (b n) c h w")
+                tf_rollout_nchw = rollout_video_TF_nchw
+                ar_rollout_nchw = rollout_video_AR_nchw
+
+            if self.rank == 0:
+                # --- UMAP scatter ---
+                umap_embed_n2, _ = umap_visualization(latent_actions_n1d)
+                umap_table = wandb.Table(columns=["umap_x", "umap_y"])
+                for x, y in umap_embed_n2:
+                    umap_table.add_data(x, y)
+                scatter_plot = wandb.plot.scatter(umap_table, "umap_x", "umap_y",
+                                                title=f"UMAP Visualization (Step {self.global_step})")
+
+                # --- Recon table ---
                 video_table = wandb.Table(columns=["cond | pred next | next"])
-                # -- decode into pixels if we are using latents
-                if self.loss_variant == 'residual':
-                    recon_video_bnchw += condition_video_bnchw
-                
-                
-                rollout_video_GT_bnchw, _   = self.format_batch(long_batch = True)
-                rollout_video_GT_bnchw      = rollout_video_GT_bnchw[0:1].float()
-                rollout_video_TF_nchw       = self._model_unwrapped().autoregressive_rollout(rollout_video_GT_bnchw[0],
-                                                                                             teacher_forced=True,
-                                                                                             adjust_residual = self.loss_variant == 'residual')
-                rollout_video_AR_nchw       = self._model_unwrapped().autoregressive_rollout(rollout_video_GT_bnchw[0],
-                                                                                             teacher_forced=False,
-                                                                                             adjust_residual = self.loss_variant == 'residual')
-                
-                if self.loss_variant == 'residual':
-                    recon_video_bnchw       += condition_video_bnchw
-
-                if self.on_latents:
-                    condition_video_nchw    = F.sigmoid(self.decoder(eo.rearrange(condition_video_bnchw,   'b n c h w -> (b n) c h w').bfloat16()))
-                    recon_video_nchw        = F.sigmoid(self.decoder(eo.rearrange(recon_video_bnchw,       'b n c h w -> (b n) c h w').bfloat16()))
-                    gt_video_nchw           = F.sigmoid(self.decoder(eo.rearrange(gt_video_bnchw,          'b n c h w -> (b n) c h w').bfloat16()))
-                    gt_rollout_nchw         = F.sigmoid(self.decoder(eo.rearrange(rollout_video_GT_bnchw,  'b n c h w -> (b n) c h w').bfloat16()))
-                    ar_rollout_nchw         = F.sigmoid(self.decoder(rollout_video_AR_nchw.bfloat16()))
-                    tf_rollout_nchw         = F.sigmoid(self.decoder(rollout_video_TF_nchw.bfloat16()))
-
-                    condition_video_bnchw   = eo.rearrange(condition_video_nchw,                           '(b n) c h w -> b n c h w', b=num_samples_recon)
-                    recon_video_bnchw       = eo.rearrange(recon_video_nchw,                               '(b n) c h w -> b n c h w', b=num_samples_recon)
-                    gt_video_bnchw          = eo.rearrange(gt_video_nchw,                                  '(b n) c h w -> b n c h w', b=num_samples_recon)
-            
-                # -- add reconstructions 
                 for cond, recon, gt in zip(condition_video_bnchw, recon_video_bnchw, gt_video_bnchw):
                     frame_cond_recon_gt = torch.cat([cond, recon, gt], dim=-1)
                     video_table.add_data(as_wandb_video(frame_cond_recon_gt, "Conditioning | Predicted next-frame | Next-frame"))
 
-                # --- Simplified logging ---
-                if self._wandb_run:
-                    print(f"[rank {self.rank}] logging to wandb")
-                    wandb.log({
-                        f"UMAP Scatter Plot/{self.global_step}":            scatter_plot,
-                        f"Reconstruction/{self.global_step}":               video_table,
-                        f"Rollout/Groundtruth    - {self.global_step}":     as_wandb_video(gt_rollout_nchw),
-                        f"Rollout/Teacher.forced - {self.global_step}":     as_wandb_video(tf_rollout_nchw),
-                        f"Rollout/Autoregressive - {self.global_step}":     as_wandb_video(ar_rollout_nchw),
-                    }, step=self.global_step)
+                wandb.log({
+                    f"UMAP Scatter Plot/{self.global_step}":            scatter_plot,
+                    f"Reconstruction/{self.global_step}":               video_table,
+                    f"Rollout/Groundtruth    - {self.global_step}":     as_wandb_video(gt_rollout_nchw),
+                    f"Rollout/Teacher.forced - {self.global_step}":     as_wandb_video(tf_rollout_nchw),
+                    f"Rollout/Autoregressive - {self.global_step}":     as_wandb_video(ar_rollout_nchw),
+                }, step=self.global_step)
 
         print(f"[rank {self.rank}] validation done")
         barrier()
+
 
 
 if __name__ == "__main__":
