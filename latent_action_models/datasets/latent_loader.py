@@ -30,6 +30,64 @@ def _probe_chunk_length(pt_path: Path) -> int:
         x = torch.load(pt_path, map_location='cpu')
         return int(x.shape[0])
 
+HIP_YAW                     = 0
+HIP_ROLL                    = 1
+HIP_PITCH                   = 2
+KNEE_PITCH                  = 3
+ANKLE_ROLL                  = 4
+ANKLE_PITCH                 = 5
+LEFT_SHOULDER_PITCH         = 6
+LEFT_SHOULDER_ROLL          = 7
+LEFT_SHOULDER_YAW           = 8
+LEFT_ELBOW_PITCH            = 9
+LEFT_ELBOW_YAW              = 10
+LEFT_WRIST_PITCH            = 11
+LEFT_WRIST_ROLL             = 12
+RIGHT_SHOULDER_PITCH        = 13
+RIGHT_SHOULDER_ROLL         = 14
+RIGHT_SHOULDER_YAW          = 15
+RIGHT_ELBOW_PITCH           = 16
+RIGHT_ELBOW_YAW             = 17
+RIGHT_WRIST_PITCH           = 18
+RIGHT_WRIST_ROLL            = 19
+NECK_PITCH                  = 20
+LEFT_HAND_CLOSURE_STATE     = 21
+RIGHT_HAND_CLOSURE_STATE    = 22
+LINEAR_VELOCITY             = 23
+ANGULAR_VELOCITY            = 24
+
+BUTTONS = [
+    RIGHT_SHOULDER_ROLL,
+    RIGHT_ELBOW_YAW,
+    RIGHT_WRIST_ROLL,
+    LEFT_HAND_CLOSURE_STATE,
+    RIGHT_HAND_CLOSURE_STATE,
+    LINEAR_VELOCITY,
+    ANGULAR_VELOCITY,
+]
+
+MOUSE = [
+    HIP_YAW,
+    HIP_ROLL,
+    HIP_PITCH,
+    KNEE_PITCH,
+    ANKLE_ROLL,
+    ANKLE_PITCH,
+    LEFT_SHOULDER_PITCH,
+    LEFT_SHOULDER_ROLL,
+    LEFT_SHOULDER_YAW,
+    LEFT_ELBOW_PITCH,
+    LEFT_ELBOW_YAW,
+    LEFT_WRIST_PITCH,
+    LEFT_WRIST_ROLL,
+    RIGHT_SHOULDER_PITCH,
+    RIGHT_SHOULDER_YAW,
+    RIGHT_ELBOW_PITCH,
+    RIGHT_WRIST_PITCH,
+    NECK_PITCH,
+]
+
+
 
 class LatentDataset(Dataset):
     def __init__(self,
@@ -59,8 +117,15 @@ class LatentDataset(Dataset):
 
         end_exclusive = start + (self.num_frames - 1) * self.stride + 1
 
-        path  = self._chunks["paths"][cid]
+        path        = self._chunks["paths"][cid]
+        name        = path.replace("_rgblatent.pt", "")
+        path_btn    = name + '_button.pt'
+        path_mouse  = name + '_mouse.pt'
+
         chunk = torch.load(path, map_location="cpu")  # expect shape [T, ...]
+        print(chunk.shape)
+        button= torch.load(path_btn, map_location="cpu").to(torch.int32).float()
+        mouse = torch.load(path_mouse, map_location="cpu").to(torch.float32)
         T     = int(chunk.shape[0])
 
         if end_exclusive > T:
@@ -70,6 +135,18 @@ class LatentDataset(Dataset):
             )
         
         window = chunk[start:end_exclusive:self.stride]
+        window_button = button[start:end_exclusive:self.stride]
+        window_mouse = mouse[start:end_exclusive:self.stride]
+        # -- put action data in the original 1x ordering 
+        N = window_button.shape[0]
+        K = max(max(BUTTONS), max(MOUSE)) + 1  # 25
+        actions = torch.empty((N, K), dtype=torch.float32)
+        actions[:, BUTTONS] = window_button
+        actions[:, MOUSE] = window_mouse
+
+        mouse_mean   = window_mouse .mean(dim=0)           # [N-1, M]
+        button_mean  = window_button.mean(dim=0)           # [N-1, B]
+        actions_mean = actions.mean(dim=0)
 
         if window.shape[0] != self.num_frames:
             raise RuntimeError(
@@ -84,6 +161,12 @@ class LatentDataset(Dataset):
             "start_idx":   start,
             "stride":      self.stride,
             "num_frames":  self.num_frames,
+            "agg_actions": actions_mean,
+            "agg_mouse":   mouse_mean,
+            "agg_button":  button_mean,
+            "actions":     actions,
+            "button":      window_button,
+            "mouse":       window_mouse,
         }
         return window, info
 
@@ -230,7 +313,7 @@ def latent_collate_fn(batch: list[tuple[Tensor, dict]]) -> tuple[Tensor, tuple[d
 if __name__ == "__main__":
     import time
     dataset = LatentDataset(stride = 4)
-    dataloader = DataLoader(dataset, batch_size=64, collate_fn=latent_collate_fn, num_workers=64)
+    dataloader = DataLoader(dataset, batch_size=64, collate_fn=latent_collate_fn, num_workers=0)
 
     print("Testing VideoServerIterableDataset DataLoader...")
     t0 = time.time()

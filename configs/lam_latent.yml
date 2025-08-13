@@ -31,6 +31,7 @@ val_num_samples_recon: 5
 val_every: 10000
 rollout_every: 10000
 rollout_n: 8
+probe_every: 10000
 
 # -- conditoning: add or crossattn or gated_crossattn
 conditioning: gated_crossattn
@@ -50,3 +51,15 @@ data:
   samples_per_epoch: 500000
   num_workers: 64
   stride: 30
+
+# -- probe
+probe:
+  batch_size: 60                 # keep in sync with trainer batch_size
+  dataset_name: owl_data_latent_map
+  num_frames: 2
+  resolution: 256
+  num_epochs: 5
+  samples_per_epoch: 500000
+  num_workers: 64
+  stride: 30
+  lr: 1e-4

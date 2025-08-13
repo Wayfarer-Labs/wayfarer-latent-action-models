@@ -36,6 +36,7 @@ class DataConfig:
         return cls(**recognised)
 
 
+
 @dataclass
 class BaseTrainerConfig:
     data_config:     DataConfig             = field(default_factory=DataConfig)
@@ -64,6 +65,33 @@ class BaseTrainerConfig:
 
 
 @dataclass
+class ProbeConfig:
+    batch_size:   int         = 8
+    dataset_name: DatasetType = "owl_data_latent_map"
+    num_frames:   int         = 2
+    resolution:   int         = 256
+    num_epochs:   int         = 5
+    samples_per_epoch:int     = 500000
+    num_workers:  int         = 64
+    stride:       int         = 30
+    lr:           float       = 1e-4
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ProbeConfig:
+        recognised     = {k: v for k, v in d.items() if k     in cls.__annotations__}
+        not_recognised = {k: v for k, v in d.items() if k not in cls.__annotations__}
+        
+        if not_recognised:
+            print(f"[ProbeConfig.from_dict] ‼ unknown keys ignored:")
+            for k, v in not_recognised.items(): print(f"  - {k}: {v}")
+
+        if not_recognised == {}: print(f"[ProbeConfig.from_dict] ✅ all keys recognised")
+        if not_recognised != {}: print(f"[ProbeConfig.from_dict] ❌ some keys not recognised")
+        
+        return cls(**recognised)
+
+
+@dataclass
 class LatentActionModelTrainingConfig(BaseTrainerConfig):
     video_dims:      tuple[int, int]    = (64, 64)
     in_dim:          int                = 3
@@ -80,6 +108,8 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     beta_step_percent:      float               = 0.0
     val_num_samples_umap:   int                 = 1000
     val_num_samples_recon:  int                 = 5 
+    probe_config:           Optional[ProbeConfig] = None
+    probe_every:            int                 = 10000
 
     conditioning: Literal['add', 'crossattn', 'gated_crossattn'] = 'add'
     conditioning_kwargs: dict = field(default_factory=dict)
@@ -93,10 +123,11 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> LatentActionModelTrainingConfig:
         data_cfg = DataConfig.from_dict(raw.pop("data", {}))
+        probe_cfg = ProbeConfig.from_dict(raw.pop("probe", {})) if "probe" in raw else None
 
         # filter unknown keys & tuple-ify list fields where necessary
         field_names             = {f.name for f in dataclasses.fields(cls)}
-        init_kw: dict[str, Any] = {"data_config": data_cfg}
+        init_kw: dict[str, Any] = {"data_config": data_cfg, "probe_config": probe_cfg}
         
         for k, v in raw.items():
             if k not in field_names:

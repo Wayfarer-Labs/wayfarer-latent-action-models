@@ -20,10 +20,10 @@ from    torch       import Tensor
 import  torch.nn.functional as F
 import  plotly.figure_factory as ff
 import  plotly.graph_objects as go
-from    typing      import TypedDict, NotRequired, Literal, Generator, TypedDict, Any
+from    typing      import TypedDict, NotRequired, Literal, Generator, TypedDict, Any, Optional
 
-
-from latent_action_models.datasets.video_loader import video_collate_fn
+from latent_action_models.trainers.probe_trainer        import RegressionProbeTrainer
+from latent_action_models.datasets.video_loader         import video_collate_fn
 from latent_action_models.models.latent_action_model    import ActionEncodingInfo, LatentActionModel, LatentActionModelOutput
 from latent_action_models.configs                       import LatentActionModelTrainingConfig
 from latent_action_models.trainers.base_trainer         import BaseTrainer
@@ -116,6 +116,9 @@ class Trainer_LatentActionModel(BaseTrainer):
 
     @property
     def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}_vaedim{self.cfg.vae_dim}.pt'
+
+    @property
+    def should_probe(self) -> bool: return self.cfg.probe_config and self.global_step % self.cfg.probe_every == 0
 
     def load_checkpoint(self, path: os.PathLike) -> None:
         ckpt = torch.load(path, map_location="cpu")
@@ -353,7 +356,8 @@ class Trainer_LatentActionModel(BaseTrainer):
 
                 if self.should_log:         self.log_step(info)
                 if self.should_save:        self.save_checkpoint(self.ckpt_dir / self.save_path)
-                if self.should_validate:    self.validate_simple()
+                if self.should_validate:    self.validate()
+                if self.should_probe:       self.run_probes(self.iter_loader)
 
                 self.global_step += 1 ; self.commit_log()
                 self.model.bump_step()
@@ -365,7 +369,196 @@ class Trainer_LatentActionModel(BaseTrainer):
         if self.rank == 0: print(f'[rank {self.rank}] training complete.')
 
     @torch.no_grad()
-    def validate_simple(self) -> None:
+    def validate_action_controllability(
+        self,
+        video_bnchw: Tensor,
+        *,
+        alphas: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0),
+        max_eval_windows: int = 64,
+        log_key: str = "controllability",
+    ) -> dict[str, Any] | None:
+        """
+        Rank-0-only evaluation: scale the same latent action by α and measure change vs α=0 using PSNR/LPIPS.
+        PSNR vs baseline should DECREASE as α increases (further from neutral).
+        """
+        if self.rank != 0:
+            return None
+        assert len(alphas) >= 2 and alphas[0] == 0.0, "alphas must start with 0.0"
+
+        model  = self._model_unwrapped()
+        device = self.device
+
+        # ---- 1) Forward once to get condition windows and μ ----
+        with self.amp_ctx():
+            lam = model.forward(video_bnchw.float())
+
+        cond_bnchw: Tensor = lam["condition_video_bnchw"]   # [B, N, C, H, W]
+        mu_bn1d:    Tensor = lam["mean_bn1d"]               # [B, N, 1, D]
+
+        # Flatten windows to M, keep N=1 convention for decode_to_frame
+        cond_m1chw = eo.rearrange(cond_bnchw, "b n c h w -> (b n) 1 c h w")
+        mu_m11d    = eo.rearrange(mu_bn1d,    "b n 1 d -> (b n) 1 1 d")
+
+        M = cond_m1chw.shape[0]
+        if max_eval_windows is not None and M > max_eval_windows:
+            cond_m1chw = cond_m1chw[:max_eval_windows]
+            mu_m11d    = mu_m11d[:max_eval_windows]
+            M          = cond_m1chw.shape[0]
+
+        A = len(alphas)
+
+        # ---- 2) Decode predictions for all α in one batch ----
+        cond_stack_bnchw = eo.repeat(cond_m1chw, "m n c h w -> (a m) n c h w", a=A)
+        act_scaled_bn1d  = torch.cat([mu_m11d * alpha for alpha in alphas], dim=0)  # [(A*M),1,1,D]
+
+        dec = model.decode_to_frame(cond_stack_bnchw.float(), act_scaled_bn1d.float())
+        if isinstance(dec, dict):
+            if   "reconstructed_video_bnchw" in dec: preds_bnchw = dec["reconstructed_video_bnchw"]
+            elif "predicted_video_bnchw"     in dec: preds_bnchw = dec["predicted_video_bnchw"]
+            elif "reconstructed_frame_nchw"  in dec: preds_bnchw = eo.rearrange(dec["reconstructed_frame_nchw"], "m c h w -> m 1 c h w")
+            elif "frame_nchw"                in dec:
+                out = dec["frame_nchw"]
+                preds_bnchw = out if out.ndim == 5 else eo.rearrange(out, "m c h w -> m 1 c h w")
+            else:
+                raise KeyError(f"decode_to_frame() keys not recognised: {list(dec.keys())}")
+        else:
+            out = dec
+            if out.ndim == 4: preds_bnchw = eo.rearrange(out, "m c h w -> m 1 c h w")
+            elif out.ndim == 5: preds_bnchw = out
+            else: raise RuntimeError(f"Unexpected decode shape: {tuple(out.shape)}")
+
+        if self.loss_variant == "residual":
+            preds_bnchw = preds_bnchw + cond_stack_bnchw
+
+        preds_a_m_1_chw = eo.rearrange(preds_bnchw,      "(a m) n c h w -> a m n c h w", a=A, m=M)
+        # cond_a_m_1_chw  = eo.rearrange(cond_stack_bnchw, "(a m) n c h w -> a m n c h w", a=A, m=M)  # for debugging
+
+        # ---- 3) (If latent-space) decode to RGB for metrics; return NCHW ----
+        def to_rgb_0_1(x_bnchw: Tensor) -> Tensor:
+            if self.on_latents:
+                x_nchw = eo.rearrange(x_bnchw, "b n c h w -> (b n) c h w").bfloat16()
+                x_pix  = F.sigmoid(self.decoder(x_nchw)).float().clamp(0, 1)
+                return x_pix
+            else:
+                return eo.rearrange(x_bnchw, "b n c h w -> (b n) c h w").float().clamp(0, 1)
+
+        baseline_nchw = to_rgb_0_1(preds_a_m_1_chw[0])  # [M, C, H, W]
+
+        # ---- 4) Metrics vs baseline ----
+        if not hasattr(self, "_lpips"):
+            self._lpips = piq.LPIPS(reduction="mean").to(device).eval()
+
+        psnr_vs_alpha:  list[float] = []
+        lpips_vs_alpha: list[float] = []
+
+        for a_idx in range(1, A):
+            p_nchw = to_rgb_0_1(preds_a_m_1_chw[a_idx])   # [M, C, H, W]
+            b_nchw = baseline_nchw                        # [M, C, H, W]
+
+            # Batch-mean PSNR (scalar)
+            psnr_val = piq.psnr(p_nchw, b_nchw).item()
+            psnr_vs_alpha.append(psnr_val)
+
+            # Batch-mean LPIPS (scalar); expects [-1,1]
+            lpips_val = self._lpips((p_nchw * 2 - 1), (b_nchw * 2 - 1)).item()
+            lpips_vs_alpha.append(lpips_val)
+
+        # ---- 5) Monotonicity score: PSNR should DECREASE as alpha increases ----
+        def per_sample_psnr(x: Tensor, y: Tensor) -> Tensor:
+            # returns [M]
+            try:
+                return piq.psnr(x, y, reduction="none")   # if supported by your piq version
+            except TypeError:
+                mse = F.mse_loss(x, y, reduction="none")  # [M,C,H,W]
+                mse = mse.flatten(1).mean(dim=1)          # [M]
+                return 10.0 * torch.log10(1.0 / mse.clamp_min(1e-10))
+
+        per_window = []
+        for a_idx in range(1, A):
+            p_nchw = to_rgb_0_1(preds_a_m_1_chw[a_idx])   # [M, C, H, W]
+            per_window.append(per_sample_psnr(p_nchw, baseline_nchw))  # [M]
+
+        pw = torch.stack(per_window, dim=0) if per_window else torch.empty(0, M, device=device)
+        if pw.numel() == 0:
+            monotonicity_psnr = float("nan")
+        else:
+            # strictly decreasing across alphas
+            diffs = pw[1:, :] - pw[:-1, :]    # [A-2, M]
+            if diffs.numel() == 0:
+                monotonicity_psnr = 1.0
+            else:
+                eps = 1e-6
+                decr_mask = torch.all(diffs < -eps, dim=0)  # [M]
+                monotonicity_psnr = decr_mask.float().mean().item()
+
+        # ---- 6) Log (rank 0 only) ----
+        if self._wandb_enabled:
+            log_dict = {f"{log_key}/monotonicity_psnr": monotonicity_psnr}
+            for a, v in zip(alphas[1:], psnr_vs_alpha):  log_dict[f"{log_key}/psnr_vs_alpha/alpha_{a:g}"]  = v
+            for a, v in zip(alphas[1:], lpips_vs_alpha): log_dict[f"{log_key}/lpips_vs_alpha/alpha_{a:g}"] = v
+            wandb.log(log_dict, step=self.global_step)
+
+        return {
+            "monotonicity_psnr": monotonicity_psnr,
+            "psnr_vs_alpha":     dict(zip(alphas[1:], psnr_vs_alpha)),
+            "lpips_vs_alpha":    dict(zip(alphas[1:], lpips_vs_alpha)),
+        }
+
+
+    def run_probes(
+        self,
+        train_loader,              # labeled: (video_bnchw, meta['actions_*'])
+        val_loader   = None,
+        *,
+        mlp_hidden: int = 512,
+        mlp_depth:  int = 2,
+        mlp_dropout: float = 0.0,
+        max_steps: Optional[int] = None,
+        per_dim_metrics: bool = False,
+    ) -> None:
+        if self.rank != 0:
+            return
+
+        # linear
+        linear = RegressionProbeTrainer(
+            lam_model=self._model_unwrapped(),
+            probe_cfg=self.cfg.probe_config,
+            device=self.device,
+            rank=self.rank,
+            model_type="linear",
+            wandb_enabled=self._wandb_enabled,
+            wandb_prefix="probe",
+            max_steps=max_steps,
+            per_dim_metrics=per_dim_metrics,
+        )
+        linear.fit(train_loader, val_loader,
+                log_every=100, eval_every=1000,
+                project=self.cfg.wandb_project,
+                run_name=(self.cfg.run_name and f"{self.cfg.run_name}_probe_linear"))
+
+        # mlp
+        mlp = RegressionProbeTrainer(
+            lam_model=self._model_unwrapped(),
+            probe_cfg=self.cfg.probe_config,
+            device=self.device,
+            rank=self.rank,
+            model_type="mlp",
+            wandb_enabled=self._wandb_enabled,
+            wandb_prefix="probe",
+            mlp_hidden=mlp_hidden,
+            mlp_depth=mlp_depth,
+            mlp_dropout=mlp_dropout,
+            max_steps=max_steps,
+            per_dim_metrics=per_dim_metrics,
+        )
+        mlp.fit(train_loader, val_loader,
+                log_every=100, eval_every=1000,
+                project=self.cfg.wandb_project,
+                run_name=(self.cfg.run_name and f"{self.cfg.run_name}_probe_mlp"))
+
+
+    @torch.no_grad()
+    def validate(self) -> None:
         model: LatentActionModel = self._model_unwrapped()
 
         # ---- targets ----
@@ -431,6 +624,11 @@ class Trainer_LatentActionModel(BaseTrainer):
             if self.loss_variant == "residual":
                 recon_video_bnchw = recon_video_bnchw + condition_video_bnchw
 
+            # -- action controllability --
+            if self.rank == 0:
+                _ = self.validate_action_controllability(recon_videos_bnchw, alphas=(0.0, 0.5, 1.0, 1.5, 2.0), max_eval_windows=64)
+
+            # -- rollouts --
             # ---- Rollouts need long sequences (>2 frames) ----
             # Get a long-batch sample; if exhausted, recreate iterator and pull again
             try:
