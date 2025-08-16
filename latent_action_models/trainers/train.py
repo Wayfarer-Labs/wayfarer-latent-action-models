@@ -115,7 +115,8 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.conditioning_type: Literal['add', 'crossattn', 'gated_crossattn'] = self.cfg.conditioning
 
     @property
-    def save_path(self) -> str: return f'lam_s{self.global_step}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}_vaedim{self.cfg.vae_dim}.pt'
+    def save_path(self) -> str: 
+        return f'lam_s{self.global_step}_e{self.cfg.num_enc_blocks}-d{self.cfg.num_dec_blocks}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}_vaedim{self.cfg.vae_dim}.pt'
 
     @property
     def should_probe(self) -> bool: return self.cfg.probe_config and self.global_step % self.cfg.probe_every == 0
@@ -266,13 +267,28 @@ class Trainer_LatentActionModel(BaseTrainer):
                              ssim            = ssim if self.should_log else None,
                              lam_outputs     = lam_outputs )
 
-
+    @property
+    def wandb_run_name(self) -> str:
+        attrs = [
+            f'e{self.cfg.num_enc_blocks}d{self.cfg.num_dec_blocks}',
+            f'v{self.cfg.vae_dim}',
+            f'beta-{self.cfg.beta}',
+            f'loss-{self.cfg.loss_variant}',
+            f'cond-{self.cfg.conditioning}',
+            f'stride-{self.cfg.data_config.stride}',
+            f'mdim-{self.cfg.model_dim}',
+            f'loss-{self.cfg.loss_variant}',
+        ]
+        return '_'.join(attrs)
+    
     def log_step(self, stats: LogStats) -> None:
         # -- lazy init wandb
         if self._wandb_run is None:
-            run_name        = self.cfg.run_name or f"LAM_{time.time():.0f}"
+            run_name        = self.cfg.run_name or self.wandb_run_name
             self._wandb_run = wandb.init(project=self.cfg.wandb_project,
                                          name=run_name, config=dataclasses.asdict(self.cfg))
+            wandb.define_metric("global_step")
+            wandb.define_metric("*", step_metric="global_step")  # make all series use global_step
             wandb.watch(self.model, log='gradients', log_freq=self.cfg.log_every * 20)
             print(f'[rank {self.rank}] wandb initialized, watching gradients...')
     
@@ -313,7 +329,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         if "iter_sec" in stats:     wandb_dict["perf/iter_sec"]     = stats["iter_sec"]
         if "batch_sec" in stats:    wandb_dict["perf/batch_sec"]    = stats["batch_sec"]
 
-        wandb.log(wandb_dict, step=self.global_step, commit=False)
+        wandb.log({"global_step": self.global_step, **wandb_dict}, commit=False)
         print(f"[rank {self.rank}] {wandb_dict}")
 
     def commit_log(self) -> None:
@@ -329,7 +345,9 @@ class Trainer_LatentActionModel(BaseTrainer):
             
         wandb.log({
             f'debug/sample_{self.debug_show_samples}_video': as_wandb_video(video_bnchw, "video"),
-        }, step=self.global_step)
+            "global_step": self.global_step,
+        })
+
         self.debug_show_samples -= 1
 
     def train(self):
@@ -356,8 +374,9 @@ class Trainer_LatentActionModel(BaseTrainer):
 
                 if self.should_log:         self.log_step(info)
                 if self.should_save:        self.save_checkpoint(self.ckpt_dir / self.save_path)
+                if self.should_probe:       self.run_probes(self.dataloader, self.val_dataloader)
+                # TODO Split into validate_rollouts, validate_umap, and validate_action_controllability?
                 if self.should_validate:    self.validate()
-                if self.should_probe:       self.run_probes(self.iter_loader)
 
                 self.global_step += 1 ; self.commit_log()
                 self.model.bump_step()
@@ -496,7 +515,7 @@ class Trainer_LatentActionModel(BaseTrainer):
             log_dict = {f"{log_key}/monotonicity_psnr": monotonicity_psnr}
             for a, v in zip(alphas[1:], psnr_vs_alpha):  log_dict[f"{log_key}/psnr_vs_alpha/alpha_{a:g}"]  = v
             for a, v in zip(alphas[1:], lpips_vs_alpha): log_dict[f"{log_key}/lpips_vs_alpha/alpha_{a:g}"] = v
-            wandb.log(log_dict, step=self.global_step)
+            wandb.log({"global_step": self.global_step, **log_dict})
 
         return {
             "monotonicity_psnr": monotonicity_psnr,
@@ -520,41 +539,41 @@ class Trainer_LatentActionModel(BaseTrainer):
             return
 
         # linear
-        linear = RegressionProbeTrainer(
-            lam_model=self._model_unwrapped(),
-            probe_cfg=self.cfg.probe_config,
-            device=self.device,
-            rank=self.rank,
-            model_type="linear",
-            wandb_enabled=self._wandb_enabled,
-            wandb_prefix="probe",
-            max_steps=max_steps,
-            per_dim_metrics=per_dim_metrics,
-        )
-        linear.fit(train_loader, val_loader,
-                log_every=100, eval_every=1000,
-                project=self.cfg.wandb_project,
-                run_name=(self.cfg.run_name and f"{self.cfg.run_name}_probe_linear"))
-
-        # mlp
-        mlp = RegressionProbeTrainer(
-            lam_model=self._model_unwrapped(),
-            probe_cfg=self.cfg.probe_config,
-            device=self.device,
-            rank=self.rank,
-            model_type="mlp",
-            wandb_enabled=self._wandb_enabled,
-            wandb_prefix="probe",
-            mlp_hidden=mlp_hidden,
-            mlp_depth=mlp_depth,
-            mlp_dropout=mlp_dropout,
-            max_steps=max_steps,
-            per_dim_metrics=per_dim_metrics,
-        )
-        mlp.fit(train_loader, val_loader,
-                log_every=100, eval_every=1000,
-                project=self.cfg.wandb_project,
-                run_name=(self.cfg.run_name and f"{self.cfg.run_name}_probe_mlp"))
+        try:
+            self.model.eval() 
+            linear = RegressionProbeTrainer(
+                lam_model=self._model_unwrapped(),
+                probe_cfg=self.cfg.probe_config,
+                device=self.device,
+                rank=self.rank,
+                model_type="linear",
+                wandb_prefix="probe",
+                max_steps=max_steps,
+                per_dim_metrics=per_dim_metrics,
+            )
+            linear.fit(train_loader, val_loader,
+                    log_every=100,
+                    at_step=self.global_step)
+            
+            # mlp
+            mlp = RegressionProbeTrainer(
+                lam_model=self._model_unwrapped(),
+                probe_cfg=self.cfg.probe_config,
+                device=self.device,
+                rank=self.rank,
+                model_type="mlp",
+                wandb_prefix="probe",
+                mlp_hidden=mlp_hidden,
+                mlp_depth=mlp_depth,
+                mlp_dropout=mlp_dropout,
+                max_steps=max_steps,
+                per_dim_metrics=per_dim_metrics,
+            )
+            mlp.fit(train_loader, val_loader,
+                    log_every=100,
+                    at_step=self.global_step)
+        finally:
+            self.model.train()
 
 
     @torch.no_grad()
@@ -699,12 +718,13 @@ class Trainer_LatentActionModel(BaseTrainer):
                     video_table.add_data(as_wandb_video(frame_cond_recon_gt, "Conditioning | Predicted next-frame | Next-frame"))
 
                 wandb.log({
+                    "global_step": self.global_step,
                     f"UMAP Scatter Plot/{self.global_step}":            scatter_plot,
                     f"Reconstruction/{self.global_step}":               video_table,
                     f"Rollout/Groundtruth    - {self.global_step}":     as_wandb_video(gt_rollout_nchw),
                     f"Rollout/Teacher.forced - {self.global_step}":     as_wandb_video(tf_rollout_nchw),
                     f"Rollout/Autoregressive - {self.global_step}":     as_wandb_video(ar_rollout_nchw),
-                }, step=self.global_step)
+                })
 
         print(f"[rank {self.rank}] validation done")
         barrier()

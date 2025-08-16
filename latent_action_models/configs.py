@@ -20,6 +20,7 @@ class DataConfig:
     samples_per_epoch:      int         = 1_000_000
     num_workers:            int         = 8
     stride:                 int         = 1
+    split: Literal["train", "val"]      = "train"
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DataConfig:

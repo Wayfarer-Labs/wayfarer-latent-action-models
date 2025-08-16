@@ -28,10 +28,16 @@ class BaseTrainer(nn.Module):
         # -- data
         self.dataloader     = create_dataloader(self.cfg.data_config)
         self.dataset        = self.dataloader.dataset
+        self.iter_loader    = iter(self.dataloader)
         self.is_iterable    =  isinstance(self.dataset, IterableDataset)
+        # -- make vaidation data loader
+        val_data_config     = copy.deepcopy(self.cfg.data_config)
+        val_data_config.split = 'val'
+        self.val_dataloader = create_dataloader(val_data_config)
+        self.val_iterloader = iter(self.val_dataloader)
+        # -- make long data loader
         long_data_config    = copy.deepcopy(self.cfg.data_config)
         long_data_config.num_frames = self.cfg.rollout_n
-        self.iter_loader    = iter(self.dataloader)
         self.epoch          = 0
 
         if self.is_iterable:

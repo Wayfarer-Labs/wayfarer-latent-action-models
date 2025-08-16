@@ -6,7 +6,7 @@ lr: 6.0e-6                       # AdamW learning-rate
 weight_decay: 0.001
 betas: [0.9, 0.999]
 amp: true                        # mixed-precision (16-mixed)
-max_grad_norm: 5.0               # gradient-clip value
+max_grad_norm: 10.0               # gradient-clip value
 
 # -- training loop
 max_steps: 5000000
@@ -17,10 +17,10 @@ ckpt_every: 30000                 # save interval
 video_dims: [8, 8]           # H, W
 in_dim: 128                        # image_channels
 model_dim: 512                  # lam_model_dim
-vae_dim: 16                      # lam_latent_dim
+vae_dim: 8                      # lam_latent_dim
 patch_size: 1                   # lam_patch_size
-num_enc_blocks: 8               # lam_enc_blocks
-num_dec_blocks: 8               # lam_dec_blocks
+num_enc_blocks: 16               # lam_enc_blocks
+num_dec_blocks: 16               # lam_dec_blocks
 num_heads: 16                    # lam_num_heads
 dropout: 0.0
 beta_start: null
@@ -37,9 +37,9 @@ probe_every: 10000
 conditioning: gated_crossattn
 conditioning_kwargs:
   freeze_steps_pct: 0.01
-  init_gate: 0.15
+  init_gate: 0.30
 # -- whether the decoder outputs the difference between frames or the new frame itself
-loss_variant: reconstruction
+loss_variant: residual
 
 # -- dataset
 data:
@@ -50,16 +50,16 @@ data:
   num_epochs: 5
   samples_per_epoch: 500000
   num_workers: 64
-  stride: 30
+  stride: 16
 
 # -- probe
 probe:
-  batch_size: 60                 # keep in sync with trainer batch_size
+  batch_size: 512                 # keep in sync with trainer batch_size
   dataset_name: owl_data_latent_map
   num_frames: 2
   resolution: 256
-  num_epochs: 5
-  samples_per_epoch: 500000
+  num_epochs: 1
   num_workers: 64
-  stride: 30
-  lr: 1e-4
+  stride: 16
+  lr: 6.0e-4
+  samples_per_epoch: 10000

@@ -75,7 +75,7 @@ def _dataset(dataset: Literal["owl_data_latent"], config: DataConfig, rank: int 
 
 @multimethod
 def _dataset(dataset: Literal["owl_data_latent_map"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
-    return LatentDataset(num_frames=config.num_frames, stride=config.stride)
+    return LatentDataset(split=config.split, num_frames=config.num_frames, stride=config.stride)
 
 
 def create_dataloader(config: DataConfig) -> DataLoader:

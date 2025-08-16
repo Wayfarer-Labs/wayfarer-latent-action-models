@@ -13,11 +13,12 @@ from    torch               import Tensor
 from    collections         import defaultdict
 from    torch.utils.data    import IterableDataset, Dataset, DataLoader
 from    pathlib             import Path
-from    typing              import Generator
+from    typing              import Generator, Literal
 
 
-LATENT_BASE_DIR = Path('/mnt/data/datasets/1x_latents/')
-MANIFEST_PATH   = Path('latent_action_models/datasets/manifest')
+LATENT_TRAIN_DIR    = Path('/mnt/data/datasets/1x_latents/')
+LATENT_VAL_DIR      = Path('/mnt/data/datasets/1x_latents_val/')
+MANIFEST_PATH       = Path('latent_action_models/datasets/manifest')
 
 class ChunkSizeException(Exception):
     pass
@@ -88,20 +89,24 @@ MOUSE = [
 ]
 
 
-
 class LatentDataset(Dataset):
     def __init__(self,
-                base_dir: Path      = LATENT_BASE_DIR,
+                split: Literal['train', 'val'] = 'train',
                 num_frames: int     = 2,
                 stride: int         = 1,
         ):
+
+        self.split = split
+        
+        if      self.split == 'train':  base_dir = LATENT_TRAIN_DIR
+        elif    self.split == 'val':    base_dir = LATENT_VAL_DIR
 
         self.base_dir       = base_dir
         self.num_episodes   = len(list(self.base_dir.glob('*')))
         self.num_frames     = num_frames
         self.stride         = stride
 
-        manifest            = LatentDataset.build_manifest(self.num_frames, self.stride, self.base_dir)
+        manifest            = self.build_manifest(self.num_frames, self.stride, self.base_dir)
 
         self._chunks        = manifest['chunks']
         self._windows       = manifest['windows']
@@ -123,7 +128,6 @@ class LatentDataset(Dataset):
         path_mouse  = name + '_mouse.pt'
 
         chunk = torch.load(path, map_location="cpu")  # expect shape [T, ...]
-        print(chunk.shape)
         button= torch.load(path_btn, map_location="cpu").to(torch.int32).float()
         mouse = torch.load(path_mouse, map_location="cpu").to(torch.float32)
         T     = int(chunk.shape[0])
@@ -171,11 +175,10 @@ class LatentDataset(Dataset):
         return window, info
 
 
-    @classmethod
-    def build_manifest(cls, num_frames: int, stride: int, base_dir: Path) -> dict[str, ...]:
+    def build_manifest(self, num_frames: int, stride: int, base_dir: Path) -> dict[str, ...]:
         MANIFEST_PATH.mkdir(parents=True, exist_ok=True)
         
-        manifest_name   = f"manifest_stride{stride}_numframes{num_frames}.pt"
+        manifest_name   = f"{self.split}_manifest_stride{stride}_numframes{num_frames}.pt"
         manifest_path   = MANIFEST_PATH / manifest_name
 
         if manifest_path.exists():
@@ -195,13 +198,12 @@ class LatentDataset(Dataset):
             
             if not splits.exists():  continue
 
-            for chunk in sorted(splits.glob("*_rgblatent.pt"), key=lambda p: p.name):
+            for chunk in sorted(splits.glob("0000000*_rgblatent.pt"), key=lambda p: p.name):
                 try:                L = _probe_chunk_length(chunk)
                 except Exception:   continue
                 
                 # number of valid start positions for exactly num_frames with given stride
                 count = L - window_span
-                print(L, count)
                 if count <= 0: continue
 
                 chunk_paths += [chunk]
@@ -253,7 +255,7 @@ class LatentDataset(Dataset):
 
 
 class LatentIterableDataset(IterableDataset):
-    def __init__(self, base_dir: Path = LATENT_BASE_DIR, num_frames: int = 2, stride: int = 1):
+    def __init__(self, base_dir: Path = LATENT_TRAIN_DIR, num_frames: int = 2, stride: int = 1):
         self.base_dir       = base_dir
         self.num_episodes   = len(list(self.base_dir.glob('*')))
         self.num_frames     = num_frames
@@ -267,7 +269,7 @@ class LatentIterableDataset(IterableDataset):
                 path,
                 torch.load(path, map_location='meta').shape[0]
             )
-            for path in episode_path.glob('*_rgblatent.pt')
+            for path in episode_path.glob('0000000*_rgblatent.pt')
         ]
 
     def sample(self) -> tuple[Tensor, dict]:
