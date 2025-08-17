@@ -1,4 +1,5 @@
 import pathlib, torch, time, os, abc, copy
+from datetime           import datetime
 from abc                import abstractmethod
 from contextlib         import nullcontext
 from torch.optim        import AdamW
@@ -49,8 +50,8 @@ class BaseTrainer(nn.Module):
         self.long_dataloader    = create_dataloader(long_data_config)
         self.iter_long_loader   = iter(self.long_dataloader)
         # -- dirs
-        self.ckpt_dir           = pathlib.Path(cfg.ckpt_dir or CKPT_DIR)
-        self.ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self.ckpt_root           = pathlib.Path(cfg.ckpt_root or CKPT_DIR)
+        self.ckpt_root.mkdir(parents=True, exist_ok=True)
         # -- optimisation
         self.optimizer          = AdamW(self.model.parameters(),
                                     lr=cfg.lr,
@@ -136,8 +137,8 @@ class BaseTrainer(nn.Module):
         return self.cfg.resume_checkpoint is not None       and self.rank == 0
 
     @property
-    def should_validate(self) -> bool:
-        return self.global_step % self.cfg.val_every == 0
+    def should_evaluate(self) -> bool:
+        return self.global_step % self.cfg.eval_every == 0
 
     def amp_ctx(self):
         return torch.amp.autocast(self.device.type) if self.use_amp else nullcontext()

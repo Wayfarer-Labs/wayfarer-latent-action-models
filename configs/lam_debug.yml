@@ -24,9 +24,9 @@ num_dec_blocks: 4               # lam_dec_blocks
 num_heads: 4                    # lam_num_heads
 dropout: 0.0
 beta: 0.0002                     # KL weight
-val_num_samples_umap: 50
-val_num_samples_recon: 5
-val_every: 1
+eval_num_samples_umap: 50
+eval_num_samples_recon: 5
+eval_every: 1
 
 # -- conditoning
 conditioning: 'crossattn'

@@ -37,13 +37,13 @@ class DataConfig:
         return cls(**recognised)
 
 
-
 @dataclass
 class BaseTrainerConfig:
     data_config:     DataConfig             = field(default_factory=DataConfig)
+    debug:           bool                   = False
 
     # -- checkpointing
-    ckpt_dir:         str                   = "checkpoints"
+    ckpt_root:         str                   = "checkpoints"
     resume_checkpoint:Optional[str]         = None
     run_name:         Optional[str]         = None
     wandb_project:    str                   = "latent-action-models"
@@ -60,7 +60,7 @@ class BaseTrainerConfig:
     max_steps:       int                    = 100_000
     log_every:       int                    = 100
     ckpt_every:      int                    = 5_000
-    val_every:       int                    = 2_500
+    eval_every:       int                   = 2_500
     rollout_every:   int                    = 5_000
     rollout_n:       int                    = 32
 
@@ -76,6 +76,14 @@ class ProbeConfig:
     num_workers:  int         = 64
     stride:       int         = 30
     lr:           float       = 1e-4
+    mlp_hidden:   int         = 512
+    mlp_depth:    int         = 2
+    mlp_dropout:  float       = 0.0
+
+    @classmethod
+    def from_yaml(cls, yaml_path: str | pathlib.Path) -> ProbeConfig:
+        with open(yaml_path, "r") as f: raw: dict[str, Any] = yaml.safe_load(f)
+        return cls.from_dict(raw)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> ProbeConfig:
@@ -107,35 +115,38 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     beta:                   float               = 0.0    # KL weight
     beta_start:             Optional[float]     = None
     beta_step_percent:      float               = 0.0
-    val_num_samples_umap:   int                 = 1000
-    val_num_samples_recon:  int                 = 5 
-    probe_config:           Optional[ProbeConfig] = None
+    eval_num_samples_umap:   int                = 1000
+    eval_num_samples_recon:  int                = 5 
+    probe_config:         Optional[ProbeConfig] = None
     probe_every:            int                 = 10000
 
     conditioning: Literal['add', 'crossattn', 'gated_crossattn'] = 'add'
     conditioning_kwargs: dict = field(default_factory=dict)
     loss_variant: Literal['reconstruction', 'residual'] = 'reconstruction'
+    config_path: Optional[str | pathlib.Path] = None
 
     @classmethod
     def from_yaml(cls, yaml_path: str | pathlib.Path) -> LatentActionModelTrainingConfig:
         with open(yaml_path, "r") as f: raw: dict[str, Any] = yaml.safe_load(f)
-        return cls.from_dict(raw)
+        return cls.from_dict(raw, path=yaml_path)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> LatentActionModelTrainingConfig:
+    def from_dict(cls, raw: dict[str, Any], path: str | pathlib.Path | None = None) -> LatentActionModelTrainingConfig:
         data_cfg = DataConfig.from_dict(raw.pop("data", {}))
-        probe_cfg = ProbeConfig.from_dict(raw.pop("probe", {})) if "probe" in raw else None
 
         # filter unknown keys & tuple-ify list fields where necessary
         field_names             = {f.name for f in dataclasses.fields(cls)}
-        init_kw: dict[str, Any] = {"data_config": data_cfg, "probe_config": probe_cfg}
+        init_kw: dict[str, Any] = {"data_config": data_cfg}
         
         for k, v in raw.items():
-            if k not in field_names:
+            if k not in field_names and k != "config_path":
                 print(f"[LatentActionModelTrainingConfig.from_dict] ‼ unknown key '{k}' ignored")
                 continue
             if isinstance(v, list): v = tuple(v)
             init_kw[k] = v
+
+        # -- save config path
+        init_kw["config_path"] = path
 
         return cls(**init_kw)
 
@@ -152,3 +163,17 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
     def __repr__(self) -> str:
         parts = [f"{k}={v!r}" for k, v in asdict(self).items() if k != "data"]
         return f"{self.__class__.__name__}({', '.join(parts)}, data={self.data})"
+
+    def wandb_run_name(self) -> str:
+        attrs = [
+            f'e{self.num_enc_blocks}d{self.num_dec_blocks}',
+            f'v{self.vae_dim}',
+            f'beta-{self.beta}',
+            f'loss-{self.loss_variant}',
+            f'cond-{self.conditioning}',
+            f'stride-{self.data_config.stride}',
+            f'mdim-{self.model_dim}',
+            f'loss-{self.loss_variant}',
+        ]
+        if self.debug: attrs.append('debug')
+        return '_'.join(attrs)

@@ -13,7 +13,7 @@ from    latent_action_models.models.st_transformer import (
     CrossAttention  # action conditioning  
 )
 import  latent_action_models.utils as utils
-
+from    latent_action_models.configs import LatentActionModelTrainingConfig
 
 class ActionEncodingInfo(TypedDict):
     action_bn1d:        Tensor
@@ -222,6 +222,23 @@ class LatentActionModel(nn.Module):
                 frames_chw          += [current_frame_chw + frame_adjust] # -- we adjust the frame if we are predicting residuals
             return  torch.stack(frames_chw, dim=0)
         finally:    self.train()
+
+    @classmethod
+    def from_config(cls, config: LatentActionModelTrainingConfig) -> 'LatentActionModel':
+            return cls(
+            video_dims      = config.video_dims,
+            in_dim          = config.in_dim,
+            model_dim       = config.model_dim,
+            vae_dim         = config.vae_dim,
+            patch_size      = config.patch_size,
+            num_enc_blocks  = config.num_enc_blocks,
+            num_dec_blocks  = config.num_dec_blocks,
+            num_heads       = config.num_heads,
+            dropout         = config.dropout,
+            conditioning    = config.conditioning,
+            conditioning_kwargs = config.conditioning_kwargs,
+            total_steps         = config.max_steps
+        )
 
 
 if __name__ == '__main__':

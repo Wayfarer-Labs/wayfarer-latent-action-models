@@ -2,6 +2,7 @@ import  os
 import  piq
 import  time
 import  polars as pl
+import  shutil
 import  torch
 import  pandas as pd
 from torch._dynamo.eval_frame import null_context
@@ -77,21 +78,6 @@ class LogStats(TypedDict):
     psnr:           NotRequired[Number | None]
     ssim:           NotRequired[Number | None]
 
-def create_latent_action_model(config: LatentActionModelTrainingConfig) -> LatentActionModel:
-    return LatentActionModel(
-        video_dims      = config.video_dims,
-        in_dim          = config.in_dim,
-        model_dim       = config.model_dim,
-        vae_dim         = config.vae_dim,
-        patch_size      = config.patch_size,
-        num_enc_blocks  = config.num_enc_blocks,
-        num_dec_blocks  = config.num_dec_blocks,
-        num_heads       = config.num_heads,
-        dropout         = config.dropout,
-        conditioning    = config.conditioning,
-        conditioning_kwargs = config.conditioning_kwargs,
-        total_steps         = config.max_steps
-    )
 
 
 def kl_divergence(mean_bn1d: Tensor, logvar_bn1d: Tensor) -> Tensor:
@@ -102,7 +88,7 @@ def kl_divergence(mean_bn1d: Tensor, logvar_bn1d: Tensor) -> Tensor:
 
 class Trainer_LatentActionModel(BaseTrainer):
     def __init__(self, config: LatentActionModelTrainingConfig) -> None:
-        latent_action_model = create_latent_action_model(config)
+        latent_action_model = LatentActionModel.from_config(config)
         *_, device = init_distributed()
         super(Trainer_LatentActionModel, self).__init__(latent_action_model, config, device=device)
         self.beta_scheduler     = config.beta_scheduler_linear_warmup()
@@ -113,10 +99,23 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.cfg: LatentActionModelTrainingConfig = config # -- reassign for typechecking:)
         self.loss_variant: Literal['residual', 'reconstruction'] = self.cfg.loss_variant
         self.conditioning_type: Literal['add', 'crossattn', 'gated_crossattn'] = self.cfg.conditioning
+        self.setup_run_dir()
+
+    def setup_run_dir(self) -> None:
+        self.run_dir = self.ckpt_root / self.wandb_run_name
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        # -- copy yaml to the dir
+        if self.cfg.config_path is not None:
+            shutil.copy(self.cfg.config_path, self.run_dir / 'config.yml')
+
+        self.ckpt_dir = self.run_dir / 'checkpoints'
+        self.ckpt_dir.mkdir(parents=True, exist_ok=True)
+
 
     @property
     def save_path(self) -> str: 
-        return f'lam_s{self.global_step}_e{self.cfg.num_enc_blocks}-d{self.cfg.num_dec_blocks}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}_vaedim{self.cfg.vae_dim}.pt'
+        return f'checkpoint_step={self.global_step}.pt'
+        # return f'lam_s{self.global_step}_e{self.cfg.num_enc_blocks}-d{self.cfg.num_dec_blocks}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}_vaedim{self.cfg.vae_dim}.pt'
 
     @property
     def should_probe(self) -> bool: return self.cfg.probe_config and self.global_step % self.cfg.probe_every == 0
@@ -171,6 +170,7 @@ class Trainer_LatentActionModel(BaseTrainer):
     def iter_dataset(
         self,
         long_batch: bool = False,
+        validation: bool = False,
         *,
         sync_cuda_timing: bool = True,
     ) -> Generator[BatchEvent, None, None]:
@@ -179,19 +179,26 @@ class Trainer_LatentActionModel(BaseTrainer):
         - Iterable: recreates iterator on StopIteration (infinite stream).
         - Measures per-batch data time (includes H2D if sync_cuda_timing=True).
         """
-        loader      = self.long_dataloader if long_batch else self.dataloader
-        it          = self.iter_long_loader if long_batch else self.iter_loader
-        is_iterable = isinstance(self.dataset, IterableDataset)
+        loader = self.dataloader
+        it = self.iter_loader
+        if long_batch:
+            loader = self.long_dataloader
+            it = self.iter_long_loader
+        if validation:
+            loader = self.val_dataloader
+            it = self.iter_val_loader
+        
+        is_iterable = isinstance(loader.dataset, IterableDataset)
 
         while True:
             t0 = time.perf_counter()
-            try:
-                batch = next(it)
+            try: batch = next(it)
             except StopIteration:
                 if is_iterable:
                     # infinite stream semantics
                     it = iter(loader)
                     if long_batch: self.iter_long_loader = it
+                    elif validation: self.iter_val_loader = it
                     else:          self.iter_loader      = it
                     continue
                 else:
@@ -266,25 +273,11 @@ class Trainer_LatentActionModel(BaseTrainer):
                              psnr            = psnr if self.should_log else None,
                              ssim            = ssim if self.should_log else None,
                              lam_outputs     = lam_outputs )
-
-    @property
-    def wandb_run_name(self) -> str:
-        attrs = [
-            f'e{self.cfg.num_enc_blocks}d{self.cfg.num_dec_blocks}',
-            f'v{self.cfg.vae_dim}',
-            f'beta-{self.cfg.beta}',
-            f'loss-{self.cfg.loss_variant}',
-            f'cond-{self.cfg.conditioning}',
-            f'stride-{self.cfg.data_config.stride}',
-            f'mdim-{self.cfg.model_dim}',
-            f'loss-{self.cfg.loss_variant}',
-        ]
-        return '_'.join(attrs)
     
     def log_step(self, stats: LogStats) -> None:
         # -- lazy init wandb
         if self._wandb_run is None:
-            run_name        = self.cfg.run_name or self.wandb_run_name
+            run_name        = self.cfg.run_name or self.cfg.wandb_run_name()
             self._wandb_run = wandb.init(project=self.cfg.wandb_project,
                                          name=run_name, config=dataclasses.asdict(self.cfg))
             wandb.define_metric("global_step")
@@ -374,9 +367,8 @@ class Trainer_LatentActionModel(BaseTrainer):
 
                 if self.should_log:         self.log_step(info)
                 if self.should_save:        self.save_checkpoint(self.ckpt_dir / self.save_path)
-                if self.should_probe:       self.run_probes(self.dataloader, self.val_dataloader)
                 # TODO Split into validate_rollouts, validate_umap, and validate_action_controllability?
-                if self.should_validate:    self.validate()
+                if self.should_evaluate:    self.evaluate()
 
                 self.global_step += 1 ; self.commit_log()
                 self.model.bump_step()
@@ -524,65 +516,13 @@ class Trainer_LatentActionModel(BaseTrainer):
         }
 
 
-    def run_probes(
-        self,
-        train_loader,              # labeled: (video_bnchw, meta['actions_*'])
-        val_loader   = None,
-        *,
-        mlp_hidden: int = 512,
-        mlp_depth:  int = 2,
-        mlp_dropout: float = 0.0,
-        max_steps: Optional[int] = None,
-        per_dim_metrics: bool = False,
-    ) -> None:
-        if self.rank != 0:
-            return
-
-        # linear
-        try:
-            self.model.eval() 
-            linear = RegressionProbeTrainer(
-                lam_model=self._model_unwrapped(),
-                probe_cfg=self.cfg.probe_config,
-                device=self.device,
-                rank=self.rank,
-                model_type="linear",
-                wandb_prefix="probe",
-                max_steps=max_steps,
-                per_dim_metrics=per_dim_metrics,
-            )
-            linear.fit(train_loader, val_loader,
-                    log_every=100,
-                    at_step=self.global_step)
-            
-            # mlp
-            mlp = RegressionProbeTrainer(
-                lam_model=self._model_unwrapped(),
-                probe_cfg=self.cfg.probe_config,
-                device=self.device,
-                rank=self.rank,
-                model_type="mlp",
-                wandb_prefix="probe",
-                mlp_hidden=mlp_hidden,
-                mlp_depth=mlp_depth,
-                mlp_dropout=mlp_dropout,
-                max_steps=max_steps,
-                per_dim_metrics=per_dim_metrics,
-            )
-            mlp.fit(train_loader, val_loader,
-                    log_every=100,
-                    at_step=self.global_step)
-        finally:
-            self.model.train()
-
-
     @torch.no_grad()
-    def validate(self) -> None:
+    def evaluate(self) -> None:
         model: LatentActionModel = self._model_unwrapped()
 
         # ---- targets ----
-        target_umap   = int(self.cfg.val_num_samples_umap)
-        target_recon  = int(self.cfg.val_num_samples_recon)
+        target_umap   = int(self.cfg.eval_num_samples_umap)
+        target_recon  = int(self.cfg.eval_num_samples_recon)
 
         # ---- collectors ----
         latent_actions_list_bn1d: list[Tensor] = []
@@ -591,6 +531,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         # ---- iterators (normal + long) ----
         ev_iter      = self.iter_dataset(sync_cuda_timing=False)
         ev_iter_long = self.iter_dataset(long_batch=True, sync_cuda_timing=False)
+        vl_iter      = self.iter_dataset(validation=True)
 
         # ---- pull until quotas met ----
         umap_done = recon_done = False
@@ -732,6 +673,6 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
 if __name__ == "__main__":
-    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_latent.yml")
+    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_latent_debug.yml")
     trainer = Trainer_LatentActionModel(config)
     trainer.train()
