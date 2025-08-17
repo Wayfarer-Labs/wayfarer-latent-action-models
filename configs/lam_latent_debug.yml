@@ -1,0 +1,54 @@
+ckpt_root: /mnt/data/sami/checkpoints/lam  # where checkpoints go
+resume_checkpoint: null                   # path to *.pt to resume from (or null)
+
+# -- optimizer
+lr: 6.0e-6                       # AdamW learning-rate
+weight_decay: 0.001
+betas: [0.9, 0.999]
+amp: true                        # mixed-precision (16-mixed)
+max_grad_norm: 10.0               # gradient-clip value
+
+# -- training loop
+max_steps: 10000
+log_every: 20                  # log interval
+ckpt_every: 1000                 # save interval
+debug: true
+
+# -- model
+video_dims: [8, 8]           # H, W
+in_dim: 128                        # image_channels
+model_dim: 64                  # lam_model_dim
+vae_dim: 8                      # lam_latent_dim
+patch_size: 1                   # lam_patch_size
+num_enc_blocks: 4               # lam_enc_blocks
+num_dec_blocks: 4               # lam_dec_blocks
+num_heads: 16                    # lam_num_heads
+dropout: 0.0
+beta_start: null
+beta: 4.0e-4                     # KL weight
+beta_step_percent: null
+eeval_num_samples_umap: 800
+eeval_num_samples_recon: 5
+eeval_every: 10000
+rollout_every: 10000
+rollout_n: 8
+probe_every: 10000
+
+# -- conditoning: add or crossattn or gated_crossattn
+conditioning: gated_crossattn
+conditioning_kwargs:
+  freeze_steps_pct: 0.01
+  init_gate: 0.30
+# -- whether the decoder outputs the difference between frames or the new frame itself
+loss_variant: residual
+
+# -- dataset
+data:
+  batch_size: 60                 # keep in sync with trainer batch_size
+  dataset_name: owl_data_latent_map
+  num_frames: 2
+  resolution: 256
+  num_epochs: 5
+  samples_per_epoch: 500000
+  num_workers: 64
+  stride: 16
