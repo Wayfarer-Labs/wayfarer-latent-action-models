@@ -58,7 +58,7 @@ class ProbeTrainer:
             lam_run_dir: Path, 
             lam_step: int = 0,
             *, 
-            model_type: ModelType = "linear",
+            model_type: ModelType = "mlp",
             mlp_hidden: int = 512,
             mlp_depth: int = 2,
             mlp_dropout: float = 0.0,
@@ -66,6 +66,7 @@ class ProbeTrainer:
             max_steps: Optional[int] = None,
             per_dim_metrics: bool = False
         ):
+        self.device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
         self.probe_config = probe_config
         self.lam_config = LatentActionModelTrainingConfig.from_yaml(lam_run_dir / 'config.yml')
         self.lam_step = lam_step
@@ -74,8 +75,8 @@ class ProbeTrainer:
         self.lam_model = LatentActionModel.from_config(self.lam_config)
         self.lam_model.load_state_dict(ckpt["model"], strict=True)
         self.lam_model.eval()
+        self.lam_model.to(self.device)
         self.lam_global_step = ckpt["step"]
-        self.device = torch.device(f"cuda:0" if torch.cuda.is_available() else "cpu")
         self.rank = 0
         self.mlp_hidden = mlp_hidden
         self.mlp_depth = mlp_depth

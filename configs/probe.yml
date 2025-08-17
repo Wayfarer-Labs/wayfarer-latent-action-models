@@ -1,0 +1,13 @@
+# -- probe
+batch_size: 512                 # keep in sync with trainer batch_size
+dataset_name: owl_data_latent_map
+num_frames: 2
+resolution: 256
+num_epochs: 10
+num_workers: 64
+stride: 16
+lr: 3.0e-5
+samples_per_epoch: 100000
+mlp_hidden: 512
+mlp_depth: 4
+mlp_dropout: 0.0
