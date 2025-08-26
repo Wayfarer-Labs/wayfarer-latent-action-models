@@ -22,6 +22,29 @@ MANIFEST_PATH       = Path('/mnt/data/sami/cache/lam_manifests')
 class ChunkSizeException(Exception):
     pass
 
+# Top-level worker usable by both threads and processes
+def _collect_episode_chunks(epi_dir_str: str, keep_episodes: list[int], window_span: int) -> list[tuple[str, int, int]]:
+    epi_dir = Path(epi_dir_str)
+    try:
+        epi_id = int(epi_dir.name)
+    except Exception:
+        return []
+    if epi_id not in keep_episodes:
+        return []
+    splits = epi_dir / "splits"
+    if not splits.exists():
+        return []
+
+    episode_chunks: list[tuple[str, int, int]] = []
+    for chunk in sorted(splits.glob("*_rgb.pt"), key=lambda p: p.name):
+        L = _probe_chunk_length(chunk)
+        count = L - window_span
+        if count <= 0:
+            continue
+        episode_chunks.append((str(chunk), epi_id, int(L)))
+    return episode_chunks
+
+
 def _probe_chunk_length(pt_path: Path) -> int:
     try:
         x = torch.load(pt_path, map_location='meta')
@@ -39,12 +62,16 @@ class LatentDataset(Dataset):
                 num_frames: int     = 2,
                 stride: int         = 1,
                 seed: int           = 42,
+                parallel_backend: Literal['thread', 'process'] = 'thread',
+                max_workers: int | None = None,
         ):
         self.split          = split
         self.base_dir       = base_dir
         self.num_frames     = num_frames
         self.stride         = stride
         self.seed           = seed
+        self.parallel_backend = parallel_backend
+        self.max_workers      = max_workers
 
         self.overall_episodes = [
             int(epi_dir.name)
@@ -73,7 +100,7 @@ class LatentDataset(Dataset):
         if manifest_path.exists():
             return torch.load(manifest_path, map_location="cpu")
         else:
-            manifest = self.build_manifest(self.num_frames, self.stride, self.base_dir, keep_episodes=episodes)
+            manifest = self.build_manifest(self.num_frames, self.stride, self.base_dir, keep_episodes=episodes, backend=self.parallel_backend, max_workers=self.max_workers)
             tmp_path = manifest_path.with_suffix(f".{uuid.uuid4().hex}.tmp")
             torch.save(manifest, tmp_path)
             os.replace(tmp_path, manifest_path)
@@ -130,63 +157,58 @@ class LatentDataset(Dataset):
             "num_frames":  self.num_frames,
         }
         return window, info
+ 
+ 
+    def build_manifest_threads(self, num_frames: int, stride: int, base_dir: Path, keep_episodes: list[int], max_workers: int | None = None) -> dict[str, ...]:
+        return self.build_manifest(num_frames, stride, base_dir, keep_episodes, backend='thread', max_workers=max_workers)
 
 
-    def build_manifest(self, num_frames: int, stride: int, base_dir: Path, keep_episodes: list[int]) -> dict[str, ...]:
+    def build_manifest_processes(self, num_frames: int, stride: int, base_dir: Path, keep_episodes: list[int], max_workers: int | None = None) -> dict[str, ...]:
+        return self.build_manifest(num_frames, stride, base_dir, keep_episodes, backend='process', max_workers=max_workers)
+
+
+    def build_manifest(self, num_frames: int, stride: int, base_dir: Path, keep_episodes: list[int], backend: Literal['thread', 'process'] = 'thread', max_workers: int | None = None) -> dict[str, ...]:
         # -- build manifest if not previously computed
         window_span = (num_frames-1) * stride # distance from start to last included frame
-        chunk_paths:    list[Path]  = []
+        chunk_paths:    list[str]  = []
         episode_ids:    list[int]   = []
         lengths:        list[int]   = []
 
-        def _process_episodes_parallel(base_dir: Path, keep_episodes: list[int], window_span: int):
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            def process_episode(epi_dir):
-                if int(epi_dir.name) not in keep_episodes: 
-                    return []
-                splits = epi_dir / "splits"
-                
-                if not splits.exists():  
-                    return []
+        # Choose executor type
+        if backend == 'thread':
+            from concurrent.futures import ThreadPoolExecutor as Executor
+        elif backend == 'process':
+            from concurrent.futures import ProcessPoolExecutor as Executor
+        else:
+            raise ValueError(f"Unknown backend: {backend}")
 
-                episode_chunks = []
-                for chunk in sorted(splits.glob("*_rgb.pt"), key=lambda p: p.name):
-                    L = _probe_chunk_length(chunk)                    
-                    # number of valid start positions for exactly num_frames with given stride
-                    count = L - window_span
-                    if count <= 0: continue
-                    episode_chunks.append((chunk, int(epi_dir.name), int(L)))
-                
-                return episode_chunks
+        # Get all episode directories
+        episode_dirs = sorted(
+            [p for p in base_dir.iterdir() if p.is_dir()],
+            key=lambda p: int(p.name)
+        )
+        episode_dir_strs = [str(p) for p in episode_dirs]
 
-            # Get all episode directories
-            episode_dirs = sorted(
-                [p for p in base_dir.iterdir() if p.is_dir()],
-                key=lambda p: int(p.name)
-            )
-            
-            chunk_paths = []
-            episode_ids = []
-            lengths = []
-            
-            # Process episodes in parallel
-            with ThreadPoolExecutor(max_workers=min(32, len(episode_dirs))) as executor:
-                future_to_episode = {executor.submit(process_episode, epi_dir): epi_dir for epi_dir in episode_dirs}
-                
-                for future in tqdm(
-                    as_completed(future_to_episode), 
-                    total=len(episode_dirs),
-                    desc=f"Processing episodes: {stride=} {num_frames=}..."
-                ):
-                    episode_chunks = future.result()
-                    for chunk_path, episode_id, length in episode_chunks:
-                        chunk_paths .append(chunk_path)
-                        episode_ids .append(episode_id)
-                        lengths     .append(length)
-            
-            return chunk_paths, episode_ids, lengths
+        # Process episodes in parallel
+        worker_count = min(64, len(episode_dir_strs)) if max_workers is None else max_workers
+        if worker_count <= 0: worker_count = 1
+        from concurrent.futures import as_completed
 
-        chunk_paths, episode_ids, lengths = _process_episodes_parallel(base_dir, keep_episodes, window_span)
+        with Executor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(_collect_episode_chunks, epi_dir_str, keep_episodes, window_span): epi_dir_str
+                for epi_dir_str in episode_dir_strs
+            }
+            for future in tqdm(
+                as_completed(futures),
+                total=len(episode_dir_strs),
+                desc=f"Processing episodes: {stride=} {num_frames=} ({backend})..."
+            ):
+                episode_chunks = future.result()
+                for chunk_path, episode_id, length in episode_chunks:
+                    chunk_paths .append(chunk_path)
+                    episode_ids .append(episode_id)
+                    lengths     .append(length)
 
         assert chunk_paths
 
