@@ -1,5 +1,5 @@
-import os, sys, yaml, torch
 import omegaconf
+import os, sys, yaml, torch
 
 sys.path.append("./owl_vaes")
 

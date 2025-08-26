@@ -23,4 +23,5 @@ kmeans-pytorch
 nvidia-dali-cuda120
 ffmpeg-python
 rotary_embedding_torch
+omegaconf
 -e .
