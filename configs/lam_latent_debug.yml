@@ -15,8 +15,8 @@ ckpt_every: 1000                 # save interval
 debug: true
 
 # -- model
-video_dims: [8, 8]           # H, W
-in_dim: 128                        # image_channels
+video_dims: [360, 640]           # H, W
+in_dim: 3                        # image_channels
 model_dim: 64                  # lam_model_dim
 vae_dim: 8                      # lam_latent_dim
 patch_size: 1                   # lam_patch_size
@@ -45,7 +45,7 @@ loss_variant: residual
 # -- dataset
 data:
   batch_size: 60                 # keep in sync with trainer batch_size
-  dataset_name: owl_data_latent_map
+  dataset_name: rgb_cod
   num_frames: 2
   resolution: 256
   num_epochs: 5

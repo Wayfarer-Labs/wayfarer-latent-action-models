@@ -13,6 +13,7 @@ from    latent_action_models.datasets.decord_dataset                import Decor
 from    latent_action_models.datasets.robotics_1x_dataset           import Robotics_1X_Dataset
 from    latent_action_models.datasets.video_loader                  import VideoServerIterableDataset, video_collate_fn
 from    latent_action_models.datasets.latent_loader                 import LatentDataset, LatentIterableDataset, latent_collate_fn
+from    latent_action_models.datasets.cod_loader                    import CoD_Dataset, latent_collate_fn as latent_collate_fn_cod
 
 
 CLIPS_BASE_DIR = Path.cwd() / 'latent_action_models' / 'datasets' / 'indices' 
@@ -73,9 +74,31 @@ def _dataset(dataset: Literal["owl_data"], config: DataConfig, rank: int = 0, wo
 def _dataset(dataset: Literal["owl_data_latent"], config: DataConfig, rank: int = 0, world: int = 1) -> IterableDataset:
     return LatentIterableDataset(num_frames=config.num_frames, stride=config.stride)
 
+
 @multimethod
 def _dataset(dataset: Literal["owl_data_latent_map"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
     return LatentDataset(split=config.split, num_frames=config.num_frames, stride=config.stride)
+
+
+@multimethod
+def _dataset(dataset: Literal["latent_cod"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
+    return CoD_Dataset(
+        split=config.split,
+        is_latent=True,
+        num_frames=config.num_frames,
+        stride=config.stride,
+        parallel_backend='process',
+        max_workers=16)
+
+@multimethod
+def _dataset(dataset: Literal["rgb_cod"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
+    return CoD_Dataset(
+        split=config.split,
+        is_latent=False,
+        num_frames=config.num_frames,
+        stride=config.stride,
+        parallel_backend='process',
+        max_workers=16)
 
 
 def create_dataloader(config: DataConfig) -> DataLoader:
@@ -83,8 +106,10 @@ def create_dataloader(config: DataConfig) -> DataLoader:
     dataset         = _dataset(config.dataset_name, config, rank, world)
 
     collate_fn      = None
-    if config.dataset_name == "owl_data":           collate_fn = video_collate_fn
-    if config.dataset_name == "owl_data_latent":    collate_fn = latent_collate_fn
+    
+    if config.dataset_name == "owl_data":                   collate_fn = video_collate_fn
+    if config.dataset_name == "owl_data_latent":            collate_fn = latent_collate_fn
+    if config.dataset_name in ["latent_cod", "rgb_cod"]:    collate_fn = latent_collate_fn_cod
 
     num_workers = config.num_workers
     shuffle     = False
