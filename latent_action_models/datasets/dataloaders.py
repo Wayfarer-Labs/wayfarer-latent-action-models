@@ -26,8 +26,7 @@ class RandomDataset(Dataset):
         self.height     = self.width = config.resolution
         self.n_frames   = config.num_frames
 
-    def __len__(self):
-        return 1_000
+    def __len__(self): return 1_000
 
     def __getitem__(self, index) -> Tensor:
         video_bnchw = torch.randn(self.n_frames, 3, self.height, self.width)
@@ -90,11 +89,13 @@ def _dataset(dataset: Literal["latent_cod"], config: DataConfig, rank: int = 0, 
         parallel_backend='process',
         max_workers=16)
 
+
 @multimethod
 def _dataset(dataset: Literal["rgb_cod"], config: DataConfig, rank: int = 0, world: int = 1) -> Dataset:
     return CoD_Dataset(
         split=config.split,
         is_latent=False,
+        resolution=config.resolution,
         num_frames=config.num_frames,
         stride=config.stride,
         parallel_backend='process',
