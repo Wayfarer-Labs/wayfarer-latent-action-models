@@ -46,14 +46,14 @@ class LatentDataset(Dataset):
         self.stride         = stride
         self.seed           = seed
 
-        self.overall_episodes = sorted([
+        self.overall_episodes = [
             int(epi_dir.name)
             for epi_dir in self.base_dir.iterdir()
             if epi_dir.is_dir()
-        ])
-        _shuffled = random.Random(self.seed).shuffle(self.overall_episodes)
-        self.train_episodes = sorted(_shuffled[:int(len(_shuffled) * (1 - val_split))])
-        self.val_episodes   = sorted(_shuffled[int(len(_shuffled) * (1 - val_split)):])
+        ]
+        random.Random(self.seed).shuffle(self.overall_episodes)
+        self.train_episodes = self.overall_episodes[:int(len(self.overall_episodes) * (1 - val_split))]
+        self.val_episodes   = self.overall_episodes[int(len(self.overall_episodes) * (1 - val_split)):]
 
         self._train_manifest = self._load_or_build_manifest('train')
         self._val_manifest   = self._load_or_build_manifest('val')
@@ -133,24 +133,16 @@ class LatentDataset(Dataset):
 
 
     def build_manifest(self, num_frames: int, stride: int, base_dir: Path, keep_episodes: list[int]) -> dict[str, ...]:
-        MANIFEST_PATH.mkdir(parents=True, exist_ok=True)
-        
-        manifest_name   = f"{self.split}_manifest_stride{stride}_numframes{num_frames}.pt"
-        manifest_path   = MANIFEST_PATH / manifest_name
-
-        if manifest_path.exists():
-            return torch.load(manifest_path, map_location="cpu")
-
         # -- build manifest if not previously computed
         window_span = (num_frames-1) * stride # distance from start to last included frame
         chunk_paths:    list[Path]  = []
         episode_ids:    list[int]   = []
         lengths:        list[int]   = []
 
-        for epi_dir in sorted(
+        for epi_dir in tqdm(sorted(
             [p for p in base_dir.iterdir() if p.is_dir()],
             key=lambda p: int(p.name)
-        ):
+        ), desc=f"Processing episodes: {stride=} {num_frames=}..."):
             if int(epi_dir.name) not in keep_episodes: continue
             splits = epi_dir / "splits"
             
