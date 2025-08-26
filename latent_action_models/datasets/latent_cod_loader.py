@@ -17,7 +17,7 @@ from    typing              import Generator, Literal
 
 
 LATENT_TRAIN_DIR    = Path('/mnt/data/datasets/cod_yt_latents')
-MANIFEST_PATH       = Path('latent_action_models/datasets/manifest')
+MANIFEST_PATH       = Path('/mnt/data/sami/cache/lam_manifests')
 
 class ChunkSizeException(Exception):
     pass
@@ -139,27 +139,55 @@ class LatentDataset(Dataset):
         episode_ids:    list[int]   = []
         lengths:        list[int]   = []
 
-        for epi_dir in tqdm(sorted(
-            [p for p in base_dir.iterdir() if p.is_dir()],
-            key=lambda p: int(p.name)
-        ), desc=f"Processing episodes: {stride=} {num_frames=}..."):
-            if int(epi_dir.name) not in keep_episodes: continue
-            splits = epi_dir / "splits"
-            
-            if not splits.exists():  continue
-
-            for chunk in sorted(splits.glob("*_rgb.pt"), key=lambda p: p.name):
-                try:                L = _probe_chunk_length(chunk)
-                except Exception:   continue
+        def _process_episodes_parallel(base_dir: Path, keep_episodes: list[int], window_span: int):
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            def process_episode(epi_dir):
+                if int(epi_dir.name) not in keep_episodes: 
+                    return []
+                splits = epi_dir / "splits"
                 
-                # number of valid start positions for exactly num_frames with given stride
-                count = L - window_span
-                if count <= 0: continue
+                if not splits.exists():  
+                    return []
 
-                chunk_paths += [chunk]
-                episode_ids += [int(epi_dir.name)]
-                lengths     += [int(L)]
+                episode_chunks = []
+                for chunk in sorted(splits.glob("*_rgb.pt"), key=lambda p: p.name):
+                    L = _probe_chunk_length(chunk)                    
+                    # number of valid start positions for exactly num_frames with given stride
+                    count = L - window_span
+                    if count <= 0: continue
+                    episode_chunks.append((chunk, int(epi_dir.name), int(L)))
+                
+                return episode_chunks
+
+            # Get all episode directories
+            episode_dirs = sorted(
+                [p for p in base_dir.iterdir() if p.is_dir()],
+                key=lambda p: int(p.name)
+            )
             
+            chunk_paths = []
+            episode_ids = []
+            lengths = []
+            
+            # Process episodes in parallel
+            with ThreadPoolExecutor(max_workers=min(32, len(episode_dirs))) as executor:
+                future_to_episode = {executor.submit(process_episode, epi_dir): epi_dir for epi_dir in episode_dirs}
+                
+                for future in tqdm(
+                    as_completed(future_to_episode), 
+                    total=len(episode_dirs),
+                    desc=f"Processing episodes: {stride=} {num_frames=}..."
+                ):
+                    episode_chunks = future.result()
+                    for chunk_path, episode_id, length in episode_chunks:
+                        chunk_paths .append(chunk_path)
+                        episode_ids .append(episode_id)
+                        lengths     .append(length)
+            
+            return chunk_paths, episode_ids, lengths
+
+        chunk_paths, episode_ids, lengths = _process_episodes_parallel(base_dir, keep_episodes, window_span)
+
         assert chunk_paths
 
         C           = len(chunk_paths)
