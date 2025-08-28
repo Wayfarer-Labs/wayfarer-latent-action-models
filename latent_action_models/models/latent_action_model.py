@@ -77,15 +77,15 @@ class LatentActionModel(nn.Module):
                                                   d_model       = self.model_dim,
                                                   g0            = self.cond_kwargs['init_gate'],
                                                   freeze_steps  = int(self.cond_kwargs['freeze_steps_pct'] * total_steps))
-        
+
         nn.init.uniform_(self.action_prompt, -1, 1)
-    
+
         self.encoder        = ST_Transformer(in_dim     = self.patch_token_dim,
                                              model_dim  = self.model_dim,
                                              out_dim    = self.model_dim,
                                              num_blocks = num_enc_blocks,
                                              num_heads  = num_heads, dropout=dropout)
-        
+
         # -- vae
         self.moments_proj   = nn.Linear(model_dim,              self.vae_dim * 2)
         self.patch_proj     = nn.Linear(self.patch_token_dim,   model_dim)
@@ -135,7 +135,7 @@ class LatentActionModel(nn.Module):
         # -- variational autoencoder. v := 2 * vae_dim
         moments_bv          = self.moments_proj(latent_actions_bd)
         mean_bv, logvar_bv  = torch.chunk(moments_bv, 2, dim=1)
-        
+
         action_bv           = mean_bv
         if self.training:
             action_bv       = action_bv + torch.randn_like(logvar_bv) * torch.exp(logvar_bv * 0.5)

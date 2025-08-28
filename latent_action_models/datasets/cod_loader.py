@@ -7,6 +7,7 @@ import  traceback
 import  hashlib
 from    functools           import cache
 from    tqdm                import tqdm
+import  torch.nn.functional as F
 from    toolz               import first, valfilter
 from    itertools           import product as cartesian_product, chain
 from    torch               import Tensor
@@ -80,7 +81,8 @@ class CoD_Dataset(Dataset):
         self.file_suffix        = '_rgblatent.pt' if is_latent else 'rgb.pt'
         self.resolution         = resolution
         if self.resolution is not None: assert not self.is_latent, "Resolution is only supported for RGB data"
-        self.resize_fn          = Resize(resolution) if resolution is not None else None
+        # turns to square if specified
+        self.resize_fn          = Resize((resolution, resolution)) if resolution is not None else None
 
         self.overall_episodes = [
             int(epi_dir.name)
@@ -105,7 +107,8 @@ class CoD_Dataset(Dataset):
 
     def _load_or_build_manifest(self, split: Literal['train', 'val']) -> dict[str, ...]:
         episodes = self.train_episodes if split == 'train' else self.val_episodes
-        manifest_path = MANIFEST_PATH / f"{split}_manifest_stride{self.stride}_numframes{self.num_frames}.pt"
+        rgb2str = 'rgb' if not self.is_latent else 'latent'
+        manifest_path = MANIFEST_PATH / f"{split}_{rgb2str}_cod_manifest_stride{self.stride}_numframes{self.num_frames}.pt"
         if manifest_path.exists():
             return torch.load(manifest_path, map_location="cpu")
         else:
@@ -140,7 +143,16 @@ class CoD_Dataset(Dataset):
 
         path        = chunks_map["paths"][cid]
 
-        chunk = torch.load(path, map_location="cpu")  # expect shape [T, ...]
+        chunk = torch.load(path, map_location="cpu") # nchw, uint8 from 0 to 255 if not latent
+        if not self.is_latent:
+            # only downsize if we need to cause it's VERY expensive.
+            if self.resolution is not None and chunk.shape[1] != self.resolution:
+                chunk = self.resize_fn(chunk)
+            chunk = (chunk - 127.5) / 127.5 # normalize to [-1, 1], float32
+        
+        # might not be necessary
+        chunk = chunk.to(dtype=torch.float32)
+        
         T     = int(chunk.shape[0])
 
         if end_exclusive > T:
@@ -324,14 +336,14 @@ def latent_collate_fn(batch: list[tuple[Tensor, dict]]) -> tuple[Tensor, tuple[d
 
 if __name__ == "__main__":
     import time
-    dataset = CoD_Dataset(stride = 4, parallel_backend='process', max_workers=16)
-    dataloader = DataLoader(dataset, batch_size=64, collate_fn=latent_collate_fn, num_workers=0)
-
-    print("Testing VideoServerIterableDataset DataLoader...")
-    t0 = time.time()
-    for i, (videos, metadatas) in enumerate(dataloader):
-        print(f"Batch {i}: videos.shape={videos.shape}, min={videos.min().item():.3f}, max={videos.max().item():.3f}, mean={videos.mean().item():.3f}")
-        #print(f"Metadata[0]: {metadatas[0]}")
-        if i >= 6400:
-            break
-    print(f"Done. Time elapsed: {time.time() - t0:.2f}s")
+    for stride in [16, 8, 4, 2]:
+        dataset = CoD_Dataset(stride = stride, parallel_backend='process', max_workers=16)
+        dataloader = DataLoader(dataset, batch_size=64, collate_fn=latent_collate_fn, num_workers=0)
+        dataset[0]
+        print("Testing VideoServerIterableDataset DataLoader...")
+        t0 = time.time()
+        for i, (videos, metadatas) in enumerate(dataloader):
+            #print(f"Metadata[0]: {metadatas[0]}")
+            if i >= 6400:
+                break
+        print(f"Done. Time elapsed: {time.time() - t0:.2f}s")

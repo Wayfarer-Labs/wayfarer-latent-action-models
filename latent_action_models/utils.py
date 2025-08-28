@@ -15,7 +15,7 @@ from    toolz.itertoolz     import take, random_sample
 # reused from adaworld repo 
 
 def patchify(videos_bnchw: Tensor, size: int) -> Tensor:
-    *_, H, W     = videos_bnchw.shape
+    *_, H, W        = videos_bnchw.shape
     videos_bnchw    = videos_bnchw[:,:, :, 
                                     :H - (H % size), # -- round down to nearest patch size
                                     :W - (W % size)]

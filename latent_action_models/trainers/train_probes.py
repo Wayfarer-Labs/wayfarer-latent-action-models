@@ -83,7 +83,7 @@ class ProbeTrainer:
         self.mlp_dropout = mlp_dropout
         self.model_type = model_type
         self.max_steps = max_steps or self.probe_config.num_epochs * self.probe_config.samples_per_epoch
-        self.wandb_run_name = f'{wandb_prefix}-{self.lam_config.wandb_run_name()}'
+        self.wandb_run_name = f'{wandb_prefix}-{self.lam_config.default_wandb_run_name()}'
         self.per_dim_metrics = per_dim_metrics
         self.wandb_prefix = wandb_prefix
         self.control_names = CONTROL_NAMES  # will be trimmed to Y dim later

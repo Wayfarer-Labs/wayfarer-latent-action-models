@@ -164,7 +164,7 @@ class LatentActionModelTrainingConfig(BaseTrainerConfig):
         parts = [f"{k}={v!r}" for k, v in asdict(self).items() if k != "data"]
         return f"{self.__class__.__name__}({', '.join(parts)}, data={self.data})"
 
-    def wandb_run_name(self) -> str:
+    def default_wandb_run_name(self) -> str:
         attrs = [
             f'e{self.num_enc_blocks}d{self.num_dec_blocks}',
             f'v{self.vae_dim}',

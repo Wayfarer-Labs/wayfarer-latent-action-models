@@ -5,8 +5,7 @@ import  polars as pl
 import  shutil
 import  torch
 import  pandas as pd
-from torch._dynamo.eval_frame import null_context
-from torch.utils.data import Dataset, IterableDataset
+from    torch.utils.data import Dataset, IterableDataset
 import  wandb
 import  pathlib
 import  traceback
@@ -102,7 +101,17 @@ class Trainer_LatentActionModel(BaseTrainer):
         self.setup_run_dir()
 
     def setup_run_dir(self) -> None:
-        self.run_dir = self.ckpt_root / self.wandb_run_name
+        if self.rank == 0:
+            self._wandb_run_name = self.cfg.run_name or self.cfg.default_wandb_run_name()
+            self._wandb_run = wandb.init(project=self.cfg.wandb_project,
+                                            name=self._wandb_run_name, config=dataclasses.asdict(self.cfg))
+
+            wandb.define_metric("global_step")
+            wandb.define_metric("*", step_metric="global_step")  # make all series use global_step
+            wandb.watch(self.model, log='gradients', log_freq=self.cfg.log_every * 20)
+            print(f'[rank {self.rank}] wandb initialized, watching gradients...')
+
+        self.run_dir = self.ckpt_root / self._wandb_run_name
         self.run_dir.mkdir(parents=True, exist_ok=True)
         # -- copy yaml to the dir
         if self.cfg.config_path is not None:
@@ -114,7 +123,8 @@ class Trainer_LatentActionModel(BaseTrainer):
 
     @property
     def save_path(self) -> str: 
-        return f'checkpoint_step={self.global_step}.pt'
+        rgb2str = 'rgb' if not self.on_latents else 'latent'
+        return f'{rgb2str}_checkpoint_step={self.global_step}.pt'
         # return f'lam_s{self.global_step}_e{self.cfg.num_enc_blocks}-d{self.cfg.num_dec_blocks}_beta{self.cfg.beta}_stride{self.cfg.data_config.stride}_vaedim{self.cfg.vae_dim}.pt'
 
     @property
@@ -158,7 +168,7 @@ class Trainer_LatentActionModel(BaseTrainer):
         video_bnchw, metadata   = batch
         video_bnchw             = video_bnchw.to(self.device, non_blocking=True)
         
-        if not self.on_latents:
+        if not self.on_latents:  # video_bnchw should go from [-1, 1] to [0,1]
             video_bnchw = (video_bnchw + 1.) / 2.
 
         return (
@@ -276,15 +286,6 @@ class Trainer_LatentActionModel(BaseTrainer):
     
     def log_step(self, stats: LogStats) -> None:
         # -- lazy init wandb
-        if self._wandb_run is None:
-            run_name        = self.cfg.run_name or self.cfg.wandb_run_name()
-            self._wandb_run = wandb.init(project=self.cfg.wandb_project,
-                                         name=run_name, config=dataclasses.asdict(self.cfg))
-            wandb.define_metric("global_step")
-            wandb.define_metric("*", step_metric="global_step")  # make all series use global_step
-            wandb.watch(self.model, log='gradients', log_freq=self.cfg.log_every * 20)
-            print(f'[rank {self.rank}] wandb initialized, watching gradients...')
-    
         mu_bn1d     = stats["mu"]
         logvar_bn1d = stats["logvar"]
 
@@ -672,6 +673,6 @@ class Trainer_LatentActionModel(BaseTrainer):
 
 
 if __name__ == "__main__":
-    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_latent_debug.yml")
+    config = LatentActionModelTrainingConfig.from_yaml("configs/lam_rgb.yml")
     trainer = Trainer_LatentActionModel(config)
     trainer.train()
